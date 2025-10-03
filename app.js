@@ -460,16 +460,24 @@
       return { payload, createdAt };
     };
 
+    const encryptPayload = async (payload) => {
+      const plaintext = JSON.stringify(payload);
+      const ciphertext = await Crypto.encryptString(plaintext);
+      // Verificación defensiva
+      await Crypto.decryptString(ciphertext);
+      return ciphertext;
+    };
+
     const addEntry = async (entryWrapper) => {
       const { payload, createdAt } = ensurePayload(entryWrapper.info, entryWrapper.entry);
-      const ciphertext = await Crypto.encryptString(JSON.stringify(payload));
+      const ciphertext = await encryptPayload(payload);
       await DB.saveEntry({ ciphertext, createdAt });
       added += 1;
     };
 
     const replaceEntry = async (conflictWrapper) => {
       const { payload, createdAt } = ensurePayload(conflictWrapper.backup.info, conflictWrapper.backup.entry);
-      const ciphertext = await Crypto.encryptString(JSON.stringify(payload));
+      const ciphertext = await encryptPayload(payload);
       const localEntry = conflictWrapper.local.entry;
       const targetId = Number(localEntry.id);
       if (Number.isFinite(targetId)) {
