@@ -87,9 +87,16 @@
       createdAt: item.createdAt,
       ciphertext: item.ciphertext
     }));
-    const serialized = JSON.stringify(exported, null, 2);
+    const meta = await Crypto.exportState().catch(() => null);
+    const payload = {
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      meta,
+      entries: exported
+    };
+    const serialized = JSON.stringify(payload, null, 2);
     const filename = `diario-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    return { serialized, filename };
+    return { serialized, filename, payload };
   }
 
   function downloadBackupFile(filename, serialized) {
@@ -129,7 +136,20 @@
     } catch (err) {
       throw new Error('Backup inválido (JSON corrupto)');
     }
-    return normalizeBackupEntries(parsed);
+
+    if (Array.isArray(parsed)) {
+      return { entries: normalizeBackupEntries(parsed), meta: null, raw: parsed };
+    }
+
+    if (parsed && Array.isArray(parsed.entries)) {
+      return {
+        entries: normalizeBackupEntries(parsed.entries),
+        meta: parsed.meta || null,
+        raw: parsed
+      };
+    }
+
+    throw new Error('Formato de backup no reconocido');
   }
 
   async function replaceWithBackupEntries(entries) {
@@ -139,8 +159,9 @@
   }
 
   async function restoreBackupFromSerialized(serialized) {
-    const normalized = parseBackupSerialized(serialized);
-    return replaceWithBackupEntries(normalized);
+    const parsed = parseBackupSerialized(serialized);
+    const count = await replaceWithBackupEntries(parsed.entries);
+    return { count, meta: parsed.meta };
   }
 
   function getDropboxBaseText(state) {
@@ -364,9 +385,9 @@
     resolve(null);
   });
 
-  async function describeEntry(entry) {
+  async function describeEntry(entry, decryptFn = (payload) => Crypto.decryptString(payload)) {
     try {
-      const decrypted = await Crypto.decryptString(entry.ciphertext);
+      const decrypted = await decryptFn(entry.ciphertext);
       const data = JSON.parse(decrypted);
       return {
         title: (data.title && data.title.trim()) || 'Sin título',
@@ -387,7 +408,7 @@
     }
   }
 
-  async function buildBackupDiff(localEntries, backupEntries) {
+  async function buildBackupDiff(localEntries, backupEntries, decryptBackup) {
     const localByCipher = new Map();
     const localById = new Map();
     localEntries.forEach((entry) => {
@@ -396,10 +417,14 @@
     });
 
     const describeCache = new Map();
-    const getDescription = async (entry) => {
-      if (describeCache.has(entry.ciphertext)) return describeCache.get(entry.ciphertext);
-      const info = await describeEntry(entry);
-      describeCache.set(entry.ciphertext, info);
+    const defaultDecrypt = (payload) => Crypto.decryptString(payload);
+    const getDescription = async (entry, decryptFn = defaultDecrypt) => {
+      const activeDecrypt = decryptFn || defaultDecrypt;
+      const scope = activeDecrypt === decryptBackup ? 'backup' : 'local';
+      const cacheKey = `${entry.ciphertext}::${scope}`;
+      if (describeCache.has(cacheKey)) return describeCache.get(cacheKey);
+      const info = await describeEntry(entry, activeDecrypt);
+      describeCache.set(cacheKey, info);
       return info;
     };
 
@@ -421,13 +446,13 @@
 
     const describedNew = [];
     for (const entry of newEntries) {
-      describedNew.push({ entry, info: await getDescription(entry) });
+      describedNew.push({ entry, info: await getDescription(entry, decryptBackup) });
     }
     describedNew.sort((a, b) => (b.info.createdAt || 0) - (a.info.createdAt || 0));
 
     const describedConflicts = [];
     for (const pair of conflicts) {
-      const backupInfo = await getDescription(pair.backup);
+      const backupInfo = await getDescription(pair.backup, decryptBackup);
       const localInfo = await getDescription(pair.local);
       describedConflicts.push({
         backup: { entry: pair.backup, info: backupInfo },
@@ -448,56 +473,87 @@
     let added = 0;
     let replaced = 0;
 
-    const ensurePayload = (info, entry) => {
-      if (!info.ok || !info.payload) {
-        throw new Error('No se pudo descifrar una de las entradas del backup. Usa "Reemplazar" si deseas continuar.');
-      }
-      const payload = { ...info.payload };
-      delete payload.id;
-      delete payload.ciphertext;
-      const createdAt = Number(payload.createdAt) || entry.createdAt || Date.now();
-      payload.createdAt = createdAt;
-      return { payload, createdAt };
-    };
-
-    const encryptPayload = async (payload) => {
-      const plaintext = JSON.stringify(payload);
-      const ciphertext = await Crypto.encryptString(plaintext);
-      // Verificación defensiva
-      await Crypto.decryptString(ciphertext);
-      return ciphertext;
-    };
-
-    const addEntry = async (entryWrapper) => {
-      const { payload, createdAt } = ensurePayload(entryWrapper.info, entryWrapper.entry);
-      const ciphertext = await encryptPayload(payload);
-      await DB.saveEntry({ ciphertext, createdAt });
-      added += 1;
-    };
-
-    const replaceEntry = async (conflictWrapper) => {
-      const { payload, createdAt } = ensurePayload(conflictWrapper.backup.info, conflictWrapper.backup.entry);
-      const ciphertext = await encryptPayload(payload);
-      const localEntry = conflictWrapper.local.entry;
-      const targetId = Number(localEntry.id);
-      if (Number.isFinite(targetId)) {
-        await DB.putEntry({ id: targetId, ciphertext, createdAt });
-      } else {
-        await DB.saveEntry({ ciphertext, createdAt });
-      }
-      replaced += 1;
-    };
-
     for (const item of diff.newEntries) {
-      await addEntry(item);
+      const entry = item.entry;
+      await DB.saveEntry({
+        ciphertext: entry.ciphertext,
+        createdAt: entry.createdAt || Date.now()
+      });
+      added += 1;
     }
 
     for (const item of diff.conflicts) {
-      await replaceEntry(item);
+      const backupEntry = item.backup.entry;
+      const localEntry = item.local.entry;
+      const targetId = Number(localEntry.id);
+      if (Number.isFinite(targetId)) {
+        await DB.putEntry({
+          id: targetId,
+          ciphertext: backupEntry.ciphertext,
+          createdAt: backupEntry.createdAt || localEntry.createdAt || Date.now()
+        });
+      } else {
+        await DB.saveEntry({
+          ciphertext: backupEntry.ciphertext,
+          createdAt: backupEntry.createdAt || Date.now()
+        });
+      }
+      replaced += 1;
     }
 
     await renderEntries();
     return { added, replaced };
+  }
+
+  async function adoptBackupState(session, meta, password, originalState) {
+    if (!session || !meta || !password) return { migrated: 0 };
+
+    const entries = await DB.listEntries();
+    const updates = [];
+    for (const entry of entries) {
+      let usesNewKey = false;
+      try {
+        await session.decryptString(entry.ciphertext);
+        usesNewKey = true;
+      } catch (err) {
+        usesNewKey = false;
+      }
+      if (usesNewKey) continue;
+
+      try {
+        const plaintext = await Crypto.decryptString(entry.ciphertext);
+        const newCiphertext = await session.encryptString(plaintext);
+        updates.push({ id: entry.id, ciphertext: newCiphertext, createdAt: entry.createdAt });
+      } catch (err) {
+        console.warn('No se pudo migrar una entrada al nuevo cifrado', entry.id, err);
+      }
+    }
+
+    for (const update of updates) {
+      if (Number.isFinite(update.id)) {
+        await DB.putEntry(update);
+      }
+    }
+
+    if (updates.length) await renderEntries();
+
+    await Crypto.importState(meta);
+    const unlocked = await Crypto.tryUnlock(password);
+    if (!unlocked) {
+      if (originalState) {
+        try {
+          await Crypto.importState(originalState);
+          await Crypto.tryUnlock(password);
+        } catch (restoreErr) {
+          console.warn('No se pudo restaurar el estado de cifrado previo', restoreErr);
+        }
+      } else {
+        Crypto.lock();
+      }
+      throw new Error('La contraseña no coincide con el backup. No se aplicó el nuevo cifrado.');
+    }
+
+    return { migrated: updates.length };
   }
 
   async function getDropboxBackups(force = false) {
@@ -566,9 +622,9 @@
 
     try {
       setAppMessage(copy.start, 'muted');
-      const payload = await collectBackupPayload();
+      const backup = await collectBackupPayload();
       setAppMessage(copy.upload, 'muted');
-      await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+      await DropboxSync.uploadBackup(backup.filename, backup.serialized);
       dropboxBackupsCache = null;
       setAppMessage(copy.success, 'success');
       const state = DropboxSync.getStatus();
@@ -843,18 +899,42 @@
         return;
       }
       setAppMessage(`Descargando ${chosen.name}...`, 'muted');
-      const payload = await DropboxSync.downloadBackup(chosen.path_lower || chosen.path_display || chosen.path);
-      let normalized;
+      const serialized = await DropboxSync.downloadBackup(chosen.path_lower || chosen.path_display || chosen.path);
+      let parsedBackup;
       try {
-        normalized = parseBackupSerialized(payload);
+        parsedBackup = parseBackupSerialized(serialized);
       } catch (err) {
         setAppMessage(err.message || 'Backup inválido.', 'error');
         console.error(err);
         return;
       }
 
+      const backupEntries = parsedBackup.entries;
+      const backupMeta = parsedBackup.meta;
+      const originalState = await Crypto.exportState().catch(() => null);
+      let session = null;
+      let backupPassword = null;
+
+      if (backupMeta && backupMeta.salt && backupMeta.verifier) {
+        const promptMsg = 'Introduce la contraseña usado en este backup (normalmente la misma que usas en el diario).';
+        const providedPassword = window.prompt(promptMsg);
+        if (!providedPassword) {
+          setAppMessage('Importación cancelada: se requiere la contraseña para descifrar el backup.', 'error');
+          updateDropboxUI();
+          return;
+        }
+        try {
+          session = await Crypto.createSession(backupMeta, providedPassword);
+          backupPassword = providedPassword;
+        } catch (err) {
+          setAppMessage('La contraseña no coincide con este backup. No se importó nada.', 'error');
+          console.error(err);
+          return;
+        }
+      }
+
       const localEntries = await DB.listEntries();
-      const diff = await buildBackupDiff(localEntries, normalized);
+      const diff = await buildBackupDiff(localEntries, backupEntries, session ? session.decryptString : undefined);
 
       if (!diff.newEntries.length && !diff.conflicts.length) {
         const proceed = window.confirm('El backup es idéntico al diario local. ¿Quieres sobrescribir igualmente?');
@@ -863,9 +943,23 @@
           updateDropboxUI();
           return;
         }
-        const count = await replaceWithBackupEntries(normalized);
+        const count = await replaceWithBackupEntries(backupEntries);
+        let adoption = { migrated: 0 };
+        if (session && backupMeta) {
+          try {
+            adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
+          } catch (stateErr) {
+            setAppMessage(stateErr.message, 'error');
+            console.error(stateErr);
+            return;
+          }
+        }
         await autoSyncWithDropbox('restore');
-        setAppMessage(`Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`, 'success');
+        let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
+        if (adoption.migrated) {
+          message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
+        }
+        setAppMessage(message, 'success');
         await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
         return;
       }
@@ -880,10 +974,25 @@
       if (decision.action === 'merge') {
         try {
           const mergeResult = await mergeBackupEntries(diff);
-          const parts = [];
-          if (mergeResult.added) parts.push(`${mergeResult.added} nuevas`);
-          if (mergeResult.replaced) parts.push(`${mergeResult.replaced} actualizadas`);
-          setAppMessage(parts.length ? `Fusionaste ${parts.join(' y ')} entradas del backup.` : 'No había entradas para fusionar.', parts.length ? 'success' : 'muted');
+          let messageParts = [];
+          if (mergeResult.added) messageParts.push(`${mergeResult.added} nuevas`);
+          if (mergeResult.replaced) messageParts.push(`${mergeResult.replaced} actualizadas`);
+
+          if (session && backupMeta) {
+            try {
+              const adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
+              if (adoption.migrated) {
+                messageParts.push(`${adoption.migrated} migradas a la nueva clave`);
+              }
+            } catch (stateErr) {
+              setAppMessage(stateErr.message, 'error');
+              console.error(stateErr);
+              return;
+            }
+          }
+
+          const summary = messageParts.length ? `Fusionaste ${messageParts.join(', ')}.` : 'No había entradas para fusionar.';
+          setAppMessage(summary, messageParts.length ? 'success' : 'muted');
           await autoSyncWithDropbox('merge');
           await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
         } catch (mergeErr) {
@@ -891,9 +1000,23 @@
           console.error(mergeErr);
         }
       } else {
-        const count = await replaceWithBackupEntries(normalized);
+        const count = await replaceWithBackupEntries(backupEntries);
+        let adoption = { migrated: 0 };
+        if (session && backupMeta) {
+          try {
+            adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
+          } catch (stateErr) {
+            setAppMessage(stateErr.message, 'error');
+            console.error(stateErr);
+            return;
+          }
+        }
         await autoSyncWithDropbox('restore');
-        setAppMessage(`Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`, 'success');
+        let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
+        if (adoption.migrated) {
+          message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
+        }
+        setAppMessage(message, 'success');
         await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
       }
     } catch (err) {
@@ -988,12 +1111,12 @@
     syncBtn.textContent = 'Generando backup...';
     try {
       setAppMessage('Generando backup local...', 'muted');
-      const payload = await collectBackupPayload();
-      downloadBackupFile(payload.filename, payload.serialized);
+      const backup = await collectBackupPayload();
+      downloadBackupFile(backup.filename, backup.serialized);
       if (DropboxSync.isLinked()) {
         setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
-          await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+          await DropboxSync.uploadBackup(backup.filename, backup.serialized);
           dropboxBackupsCache = null;
           setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
           const state = DropboxSync.getStatus();
