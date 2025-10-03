@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Diario PWA</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Diario (PWA)</h1>
+  </header>
+
+  <main>
+    <section id="lock-section" class="modal">
+      <div class="modal-inner">
+        <h2 id="lock-title">Introduce la contraseña</h2>
+        <input id="password" type="password" placeholder="Contraseña" autocomplete="current-password" />
+        <div class="row">
+          <button id="unlockBtn" type="button">Abrir</button>
+          <button id="setBtn" type="button">Crear/Reset contraseña</button>
+        </div>
+        <p id="lock-msg" class="muted"></p>
+      </div>
+    </section>
+
+    <section id="app" class="hidden">
+      <form id="entryForm" autocomplete="off">
+        <input id="title" placeholder="Título" required />
+        <textarea id="content" placeholder="Escribe tu entrada..." rows="6"></textarea>
+        <label class="filebtn">Adjuntar foto
+          <input id="photo" type="file" accept="image/*" />
+        </label>
+        <div class="row">
+          <button type="submit">Guardar</button>
+          <button type="button" id="syncBtn">Sincronizar backup</button>
+          <button type="button" id="logoutBtn">Bloquear</button>
+        </div>
+      </form>
+
+      <p id="app-msg" class="muted"></p>
+
+      <section id="cloud-sync" class="card">
+        <h2>Dropbox</h2>
+        <p class="muted">Conecta tu cuenta para subir automáticamente un backup cifrado.</p>
+        <label class="text-label">App Key de Dropbox
+          <input id="dropboxAppKey" placeholder="p.ej. abcd1234" autocomplete="off" />
+        </label>
+        <p id="dropbox-status" class="muted"></p>
+        <div class="row">
+          <button type="button" id="dropboxConnectBtn">Conectar con Dropbox</button>
+          <button type="button" id="dropboxDisconnectBtn" class="secondary">Desconectar</button>
+        </div>
+        <small class="muted">Registra este dominio como redirect URI en la consola de Dropbox (OAuth 2 PKCE).</small>
+      </section>
+
+      <section id="entries"></section>
+    </section>
+  </main>
+
+  <script src="/crypto.js"></script>
+  <script src="/db.js"></script>
+  <script src="/dropbox.js"></script>
+  <script src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(console.error);
+    }
+  </script>
+</body>
+</html>
