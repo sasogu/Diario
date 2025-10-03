@@ -43,13 +43,14 @@
 
       <section id="cloud-sync" class="card">
         <h2>Dropbox</h2>
-        <p class="muted">Conecta tu cuenta para subir automáticamente un backup cifrado.</p>
+        <p class="muted">Conecta tu cuenta para subir e importar backups cifrados.</p>
         <label class="text-label">App Key de Dropbox
           <input id="dropboxAppKey" placeholder="p.ej. abcd1234" autocomplete="off" />
         </label>
         <p id="dropbox-status" class="muted"></p>
         <div class="row">
           <button type="button" id="dropboxConnectBtn">Conectar con Dropbox</button>
+          <button type="button" id="dropboxImportBtn">Importar backup</button>
           <button type="button" id="dropboxDisconnectBtn" class="secondary">Desconectar</button>
         </div>
         <small class="muted">Registra este dominio como redirect URI en la consola de Dropbox (OAuth 2 PKCE).</small>
@@ -58,6 +59,41 @@
       <section id="entries"></section>
     </section>
   </main>
+
+  <section id="backup-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-inner">
+      <h2>Elige un backup</h2>
+      <p class="muted">Esta acción reemplaza el diario local por la versión seleccionada.</p>
+      <ul id="backup-list" class="backup-list"></ul>
+      <div class="row">
+        <button type="button" id="backupConfirmBtn">Importar seleccionado</button>
+        <button type="button" id="backupCancelBtn" class="secondary">Cancelar</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="diff-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-inner">
+      <h2>Comparar backup</h2>
+      <p id="diff-summary" class="muted"></p>
+      <div id="diff-identical" class="muted"></div>
+      <div class="diff-groups">
+        <article>
+          <h3>Nuevas entradas</h3>
+          <ul id="diff-new" class="diff-list"></ul>
+        </article>
+        <article>
+          <h3>Conflictos</h3>
+          <ul id="diff-conflicts" class="diff-list"></ul>
+        </article>
+      </div>
+      <div class="row">
+        <button type="button" id="diffMergeBtn">Fusionar</button>
+        <button type="button" id="diffReplaceBtn">Reemplazar</button>
+        <button type="button" id="diffCancelBtn" class="secondary">Cancelar</button>
+      </div>
+    </div>
+  </section>
 
   <script src="crypto.js"></script>
   <script src="db.js"></script>

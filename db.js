@@ -61,6 +61,25 @@ const DB = (function () {
       } catch (err) {
         reject(err);
       }
+    }),
+    replaceEntries: (entries) => new Promise((resolve, reject) => {
+      try {
+        const tx = db.transaction(STORE, 'readwrite');
+        const store = tx.objectStore(STORE);
+        const clearReq = store.clear();
+        clearReq.onerror = (event) => reject(event.target.error);
+        clearReq.onsuccess = () => {
+          (entries || []).forEach((entry) => {
+            if (entry && typeof entry === 'object') {
+              store.put(entry);
+            }
+          });
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = (event) => reject(event.target.error);
+      } catch (err) {
+        reject(err);
+      }
     })
   };
 })();

@@ -193,6 +193,122 @@ small {
   font-size: 0.8rem;
 }
 
+#backup-modal .modal-inner {
+  width: min(420px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.backup-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.backup-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f9fafb;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: border 0.2s ease, background 0.2s ease;
+}
+
+.backup-item:hover {
+  border-color: var(--accent);
+}
+
+.backup-item.selected {
+  border-color: var(--accent);
+  background: rgba(10, 116, 218, 0.12);
+}
+
+.backup-item strong {
+  font-size: 1rem;
+}
+
+.backup-item span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#diff-modal .modal-inner {
+  width: min(560px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.diff-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.diff-groups article {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.diff-groups h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.diff-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.diff-entry {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.diff-entry strong {
+  font-size: 0.95rem;
+}
+
+.diff-entry span {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.diff-entry .conflict-local {
+  color: var(--accent);
+}
+
+.diff-entry .conflict-backup {
+  color: var(--error);
+}
+
 #entries {
   display: flex;
   flex-direction: column;

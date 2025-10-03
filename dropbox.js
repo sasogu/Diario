@@ -1,4 +1,4 @@
-// Integración mínima con Dropbox usando OAuth PKCE y subida de backups
+// Integración mínima con Dropbox usando OAuth PKCE, subida y restauración de backups
 const DropboxSync = (function(){
   const STORAGE_KEY = 'diario_dropbox_tokens_v1';
   const APP_KEY_KEY = 'diario_dropbox_app_key';
@@ -253,6 +253,70 @@ const DropboxSync = (function(){
     return metadata;
   }
 
+  async function listBackups(){
+    if (!tokens) throw new Error('Dropbox no está conectado');
+    const accessToken = await ensureAccessToken();
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    };
+
+    let url = 'https://api.dropboxapi.com/2/files/list_folder';
+    let payload = { path: '/Diario', recursive: false, include_deleted: false, include_media_info: false };
+    const entries = [];
+
+    while (true) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      if (response.status === 409) {
+        // carpeta no encontrada => no hay backups aún
+        return [];
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`No se pudo listar backups en Dropbox: ${errText}`);
+      }
+
+      const data = await response.json();
+      if (Array.isArray(data.entries)) {
+        entries.push(...data.entries);
+      }
+
+      if (!data.has_more) break;
+      url = 'https://api.dropboxapi.com/2/files/list_folder/continue';
+      payload = { cursor: data.cursor };
+    }
+
+    return entries
+      .filter((item) => item['.tag'] === 'file' && item.name?.toLowerCase().endsWith('.json'))
+      .sort((a, b) => new Date(b.server_modified || b.client_modified || 0) - new Date(a.server_modified || a.client_modified || 0));
+  }
+
+  async function downloadBackup(path){
+    if (!tokens) throw new Error('Dropbox no está conectado');
+    const accessToken = await ensureAccessToken();
+    const response = await fetch('https://content.dropboxapi.com/2/files/download', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Dropbox-API-Arg': JSON.stringify({ path })
+      }
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        await handleAuthFailure();
+      }
+      const errText = await response.text();
+      throw new Error(`No se pudo descargar el backup: ${errText}`);
+    }
+    return response.text();
+  }
+
   function getStatus(){
     return {
       linked: !!tokens,
@@ -317,6 +381,8 @@ const DropboxSync = (function(){
       notify();
     },
     uploadBackup,
+    listBackups,
+    downloadBackup,
     subscribe: (fn) => {
       if (typeof fn === 'function') listeners.add(fn);
       return () => listeners.delete(fn);

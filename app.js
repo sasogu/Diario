@@ -15,8 +15,31 @@
   const appMsg = document.getElementById('app-msg');
   const dropboxStatus = document.getElementById('dropbox-status');
   const dropboxConnectBtn = document.getElementById('dropboxConnectBtn');
+  const dropboxImportBtn = document.getElementById('dropboxImportBtn');
   const dropboxDisconnectBtn = document.getElementById('dropboxDisconnectBtn');
   const dropboxAppKeyInput = document.getElementById('dropboxAppKey');
+  const backupModal = document.getElementById('backup-modal');
+  const backupList = document.getElementById('backup-list');
+  const backupConfirmBtn = document.getElementById('backupConfirmBtn');
+  const backupCancelBtn = document.getElementById('backupCancelBtn');
+  const diffModal = document.getElementById('diff-modal');
+  const diffSummary = document.getElementById('diff-summary');
+  const diffIdentical = document.getElementById('diff-identical');
+  const diffNewList = document.getElementById('diff-new');
+  const diffConflictsList = document.getElementById('diff-conflicts');
+  const diffMergeBtn = document.getElementById('diffMergeBtn');
+  const diffReplaceBtn = document.getElementById('diffReplaceBtn');
+  const diffCancelBtn = document.getElementById('diffCancelBtn');
+
+  let dropboxBackupsCache = null;
+  let pickerResolve = null;
+  let pickerOptions = [];
+  let pickerSelectedIndex = null;
+  let diffResolve = null;
+
+  if (backupConfirmBtn) backupConfirmBtn.disabled = true;
+  if (diffMergeBtn) diffMergeBtn.disabled = false;
+  if (diffReplaceBtn) diffReplaceBtn.disabled = false;
 
   function setLockMessage(text) {
     lockMsg.textContent = text || '';
@@ -50,9 +73,11 @@
     });
   }
 
-  function formatDate(timestamp) {
-    if (!timestamp) return 'Sin fecha';
-    return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp));
+  function formatDate(value) {
+    if (!value) return 'Sin fecha';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Sin fecha';
+    return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
   }
 
   async function collectBackupPayload() {
@@ -77,16 +102,434 @@
     URL.revokeObjectURL(url);
   }
 
-  async function autoSyncWithDropbox() {
+  function normalizeBackupEntries(parsed) {
+    if (!Array.isArray(parsed) || !parsed.length) {
+      throw new Error('El backup está vacío.');
+    }
+    const normalized = parsed
+      .filter((entry) => entry && typeof entry.ciphertext === 'string')
+      .map((entry) => {
+        const record = {
+          ciphertext: entry.ciphertext,
+          createdAt: entry.createdAt || Date.now()
+        };
+        if (Number.isFinite(entry.id)) record.id = entry.id;
+        return record;
+      });
+    if (!normalized.length) {
+      throw new Error('No se encontraron entradas válidas en el backup.');
+    }
+    return normalized;
+  }
+
+  function parseBackupSerialized(serialized) {
+    let parsed;
     try {
-      setAppMessage('Entrada guardada. Preparando sincronización con Dropbox...', 'muted');
-      const payload = await collectBackupPayload();
-      setAppMessage('Entrada guardada. Subiendo backup a Dropbox...', 'muted');
-      await DropboxSync.uploadBackup(payload.filename, payload.serialized);
-      setAppMessage('Entrada guardada y sincronizada con Dropbox.', 'success');
+      parsed = JSON.parse(serialized);
     } catch (err) {
-      console.error('Sincronización automática de Dropbox falló', err);
-      setAppMessage('Entrada guardada. Dropbox no se sincronizó; revisa tu conexión.', 'error');
+      throw new Error('Backup inválido (JSON corrupto)');
+    }
+    return normalizeBackupEntries(parsed);
+  }
+
+  async function replaceWithBackupEntries(entries) {
+    await DB.replaceEntries(entries);
+    await renderEntries();
+    return entries.length;
+  }
+
+  async function restoreBackupFromSerialized(serialized) {
+    const normalized = parseBackupSerialized(serialized);
+    return replaceWithBackupEntries(normalized);
+  }
+
+  function getDropboxBaseText(state) {
+    let text = state.accountName ? `Conectado como ${state.accountName}.` : 'Conectado a Dropbox.';
+    if (state.lastSync) {
+      text += ` Última subida: ${formatDate(state.lastSync)}.`;
+    }
+    return text;
+  }
+
+  function setPickerSelection(index) {
+    pickerSelectedIndex = index;
+    const items = backupList.querySelectorAll('.backup-item');
+    items.forEach((item) => {
+      if (Number(item.dataset.index) === index) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
+    });
+    backupConfirmBtn.disabled = index === null || index === undefined;
+  }
+
+  function closeBackupPicker() {
+    pickerOptions = [];
+    pickerSelectedIndex = null;
+    backupList.innerHTML = '';
+    backupModal.classList.add('hidden');
+    backupModal.setAttribute('aria-hidden', 'true');
+    backupConfirmBtn.disabled = true;
+  }
+
+  function openBackupPicker(backups) {
+    return new Promise((resolve) => {
+      pickerResolve = resolve;
+      pickerOptions = backups;
+      backupList.innerHTML = '';
+
+      if (!backups.length) {
+        const item = document.createElement('li');
+        item.textContent = 'No hay backups disponibles.';
+        item.className = 'muted';
+        backupList.appendChild(item);
+        backupConfirmBtn.disabled = true;
+      } else {
+        backups.forEach((entry, index) => {
+          const item = document.createElement('li');
+          item.className = 'backup-item';
+          item.dataset.index = String(index);
+          const title = document.createElement('strong');
+          title.textContent = entry.name || `Backup ${index + 1}`;
+          const meta = document.createElement('span');
+          const modified = entry.server_modified || entry.client_modified;
+          const size = typeof entry.size === 'number' ? `${(entry.size / 1024).toFixed(1)} KB` : '';
+          const infoParts = [modified ? formatDate(modified) : null, size].filter(Boolean);
+          meta.textContent = infoParts.join(' · ');
+          item.appendChild(title);
+          item.appendChild(meta);
+          backupList.appendChild(item);
+        });
+        setPickerSelection(0);
+      }
+
+      backupModal.classList.remove('hidden');
+      backupModal.setAttribute('aria-hidden', 'false');
+    });
+  }
+
+  backupList.addEventListener('click', (event) => {
+    const node = event.target.closest('.backup-item');
+    if (!node) return;
+    const index = Number(node.dataset.index);
+    if (Number.isFinite(index)) setPickerSelection(index);
+  });
+
+  backupConfirmBtn.addEventListener('click', () => {
+    if (!pickerResolve) return;
+    const selection = pickerSelectedIndex != null ? pickerOptions[pickerSelectedIndex] : null;
+    const resolve = pickerResolve;
+    pickerResolve = null;
+    closeBackupPicker();
+    resolve(selection || null);
+  });
+
+  backupCancelBtn.addEventListener('click', () => {
+    if (pickerResolve) {
+      const resolve = pickerResolve;
+      pickerResolve = null;
+      closeBackupPicker();
+      resolve(null);
+    } else {
+      closeBackupPicker();
+    }
+  });
+
+  function closeDiffModal() {
+    diffNewList.innerHTML = '';
+    diffConflictsList.innerHTML = '';
+    diffSummary.textContent = '';
+    diffIdentical.textContent = '';
+    diffModal.classList.add('hidden');
+    diffModal.setAttribute('aria-hidden', 'true');
+    diffResolve = null;
+  }
+
+  function renderDiffList(listElement, items, emptyMessage, renderItem) {
+    listElement.innerHTML = '';
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = emptyMessage;
+      listElement.appendChild(li);
+      return;
+    }
+    items.forEach((item) => {
+      listElement.appendChild(renderItem(item));
+    });
+  }
+
+  function createDiffEntry(title, meta, className) {
+    const li = document.createElement('li');
+    li.className = `diff-entry${className ? ` ${className}` : ''}`;
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const span = document.createElement('span');
+    span.textContent = meta;
+    li.appendChild(strong);
+    li.appendChild(span);
+    return li;
+  }
+
+  function createConflictEntry(localInfo, backupInfo) {
+    const li = document.createElement('li');
+    li.className = 'diff-entry';
+    const backupLine = document.createElement('div');
+    backupLine.className = 'conflict-backup';
+    backupLine.textContent = `Backup: ${backupInfo.title} · ${backupInfo.meta}`;
+    const localLine = document.createElement('div');
+    localLine.className = 'conflict-local';
+    localLine.textContent = `Local: ${localInfo.title} · ${localInfo.meta}`;
+    li.appendChild(backupLine);
+    li.appendChild(localLine);
+    return li;
+  }
+
+  function openDiffModal(diff, backupName) {
+    return new Promise((resolve) => {
+      diffResolve = resolve;
+      const { newEntries, conflicts, identicalCount, totalBackup } = diff;
+      const newCount = newEntries.length;
+      const conflictCount = conflicts.length;
+      const parts = [];
+      if (newCount) parts.push(`${newCount} nuevas`);
+      if (conflictCount) parts.push(`${conflictCount} conflictos`);
+      if (!parts.length) parts.push('Sin diferencias detectables');
+      diffSummary.textContent = `${backupName || 'Backup'} · ${parts.join(' · ')}`;
+      diffIdentical.textContent = `Entradas idénticas: ${identicalCount} / ${totalBackup}`;
+
+      renderDiffList(
+        diffNewList,
+        newEntries,
+        'No hay entradas nuevas en este backup.',
+        (item) => createDiffEntry(item.info.title, formatDate(item.info.createdAt), '')
+      );
+
+      renderDiffList(
+        diffConflictsList,
+        conflicts,
+        'Sin conflictos detectados.',
+        (item) => {
+          const localInfo = {
+            title: item.local.info.title,
+            meta: formatDate(item.local.info.createdAt)
+          };
+          const backupInfo = {
+            title: item.backup.info.title,
+            meta: formatDate(item.backup.info.createdAt)
+          };
+          return createConflictEntry(localInfo, backupInfo);
+        }
+      );
+
+      diffMergeBtn.disabled = newEntries.length === 0 && conflicts.length === 0;
+      diffModal.classList.remove('hidden');
+      diffModal.setAttribute('aria-hidden', 'false');
+    });
+  }
+
+  diffMergeBtn.addEventListener('click', () => {
+    if (!diffResolve) return;
+    const resolve = diffResolve;
+    diffResolve = null;
+    closeDiffModal();
+    resolve({ action: 'merge' });
+  });
+
+  diffReplaceBtn.addEventListener('click', () => {
+    if (!diffResolve) return;
+    const resolve = diffResolve;
+    diffResolve = null;
+    closeDiffModal();
+    resolve({ action: 'replace' });
+  });
+
+  diffCancelBtn.addEventListener('click', () => {
+    if (!diffResolve) return;
+    const resolve = diffResolve;
+    diffResolve = null;
+    closeDiffModal();
+    resolve(null);
+  });
+
+  async function describeEntry(entry) {
+    try {
+      const decrypted = await Crypto.decryptString(entry.ciphertext);
+      const data = JSON.parse(decrypted);
+      return {
+        title: (data.title && data.title.trim()) || 'Sin título',
+        createdAt: data.createdAt || entry.createdAt,
+        content: data.content || '',
+        ok: true
+      };
+    } catch (err) {
+      console.error('No se pudo descifrar entrada para comparación', err);
+      return {
+        title: 'Entrada cifrada',
+        createdAt: entry.createdAt,
+        content: '',
+        ok: false
+      };
+    }
+  }
+
+  async function buildBackupDiff(localEntries, backupEntries) {
+    const localByCipher = new Map();
+    const localById = new Map();
+    localEntries.forEach((entry) => {
+      localByCipher.set(entry.ciphertext, entry);
+      if (Number.isFinite(entry.id)) localById.set(entry.id, entry);
+    });
+
+    const describeCache = new Map();
+    const getDescription = async (entry) => {
+      if (describeCache.has(entry.ciphertext)) return describeCache.get(entry.ciphertext);
+      const info = await describeEntry(entry);
+      describeCache.set(entry.ciphertext, info);
+      return info;
+    };
+
+    let identicalCount = 0;
+    const newEntries = [];
+    const conflicts = [];
+
+    for (const entry of backupEntries) {
+      if (localByCipher.has(entry.ciphertext)) {
+        identicalCount += 1;
+        continue;
+      }
+      if (Number.isFinite(entry.id) && localById.has(entry.id)) {
+        conflicts.push({ backup: entry, local: localById.get(entry.id) });
+      } else {
+        newEntries.push(entry);
+      }
+    }
+
+    const describedNew = [];
+    for (const entry of newEntries) {
+      describedNew.push({ entry, info: await getDescription(entry) });
+    }
+    describedNew.sort((a, b) => (b.info.createdAt || 0) - (a.info.createdAt || 0));
+
+    const describedConflicts = [];
+    for (const pair of conflicts) {
+      const backupInfo = await getDescription(pair.backup);
+      const localInfo = await getDescription(pair.local);
+      describedConflicts.push({
+        backup: { entry: pair.backup, info: backupInfo },
+        local: { entry: pair.local, info: localInfo }
+      });
+    }
+    describedConflicts.sort((a, b) => (b.backup.info.createdAt || 0) - (a.backup.info.createdAt || 0));
+
+    return {
+      newEntries: describedNew,
+      conflicts: describedConflicts,
+      identicalCount,
+      totalBackup: backupEntries.length
+    };
+  }
+
+  async function mergeBackupEntries(diff) {
+    let mergedCount = 0;
+    const insertEntry = async (entry) => {
+      const record = {
+        ciphertext: entry.ciphertext,
+        createdAt: entry.createdAt || Date.now()
+      };
+      await DB.saveEntry(record);
+      mergedCount += 1;
+    };
+
+    for (const item of diff.newEntries) {
+      await insertEntry(item.entry);
+    }
+
+    for (const item of diff.conflicts) {
+      await insertEntry(item.backup.entry);
+    }
+
+    await renderEntries();
+    return mergedCount;
+  }
+
+  async function getDropboxBackups(force = false) {
+    if (!DropboxSync.isLinked()) {
+      dropboxBackupsCache = null;
+      return [];
+    }
+    if (!dropboxBackupsCache || force) {
+      dropboxBackupsCache = await DropboxSync.listBackups();
+    }
+    return dropboxBackupsCache;
+  }
+
+  async function refreshDropboxBackups(baseText, force = false) {
+    if (!DropboxSync.isLinked()) return;
+    try {
+      const backups = await getDropboxBackups(force);
+      if (!DropboxSync.isLinked()) return;
+      if (backups.length) {
+        const latest = backups[0];
+        const latestDate = latest.server_modified || latest.client_modified;
+        dropboxStatus.textContent = `${baseText} Último backup disponible: ${formatDate(latestDate)} (${latest.name}). (${backups.length} en total)`;
+      } else {
+        dropboxStatus.textContent = `${baseText} Aún no hay backups en Dropbox.`;
+      }
+    } catch (err) {
+      console.error('Error listando backups de Dropbox', err);
+      dropboxStatus.textContent = `${baseText} No se pudo listar los backups.`;
+    }
+  }
+
+  async function autoSyncWithDropbox(context = 'save') {
+    const copy = (
+      {
+        save: {
+          start: 'Entrada guardada. Preparando sincronización con Dropbox...',
+          upload: 'Entrada guardada. Subiendo backup a Dropbox...',
+          success: 'Entrada guardada y sincronizada con Dropbox.',
+          error: 'Entrada guardada. Dropbox no se sincronizó; revisa tu conexión.'
+        },
+        delete: {
+          start: 'Entrada eliminada. Actualizando backup en Dropbox...',
+          upload: 'Subiendo cambios a Dropbox...',
+          success: 'Entrada eliminada y backup actualizado en Dropbox.',
+          error: 'Entrada eliminada, pero Dropbox falló. Revisa tu conexión.'
+        },
+        restore: {
+          start: 'Backup restaurado. Preparando sincronización con Dropbox...',
+          upload: 'Subiendo el backup restaurado a Dropbox...',
+          success: 'Backup restaurado y sincronizado con Dropbox.',
+          error: 'Backup restaurado, pero Dropbox no se sincronizó; revisa tu conexión.'
+        },
+        merge: {
+          start: 'Fusionando cambios con Dropbox...',
+          upload: 'Subiendo las entradas fusionadas a Dropbox...',
+          success: 'Fusionado completado y sincronizado con Dropbox.',
+          error: 'Se fusionó localmente, pero Dropbox no se sincronizó; revisa tu conexión.'
+        }
+      }[context] || {
+        start: 'Sincronizando con Dropbox...',
+        upload: 'Subiendo backup a Dropbox...',
+        success: 'Sincronización completada.',
+        error: 'No se pudo sincronizar con Dropbox.'
+      }
+    );
+
+    try {
+      setAppMessage(copy.start, 'muted');
+      const payload = await collectBackupPayload();
+      setAppMessage(copy.upload, 'muted');
+      await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+      dropboxBackupsCache = null;
+      setAppMessage(copy.success, 'success');
+      const state = DropboxSync.getStatus();
+      await refreshDropboxBackups(getDropboxBaseText(state), true);
+    } catch (err) {
+      console.error('Sincronización con Dropbox falló', err);
+      setAppMessage(copy.error, 'error');
     }
   }
 
@@ -98,20 +541,23 @@
         dropboxAppKeyInput.value = stored;
       }
     }
+
+    dropboxConnectBtn.disabled = !dropboxAppKeyInput.value.trim();
+
     if (state.linked) {
-      let text = state.accountName ? `Conectado como ${state.accountName}.` : 'Conectado a Dropbox.';
-      if (state.lastSync) {
-        text += ` Última sincronización: ${formatDate(state.lastSync)}.`;
-      }
-      dropboxStatus.textContent = text;
       dropboxDisconnectBtn.disabled = false;
+      dropboxImportBtn.disabled = false;
       dropboxConnectBtn.textContent = 'Reautorizar Dropbox';
+      const baseText = getDropboxBaseText(state);
+      dropboxStatus.textContent = `${baseText} Consultando backups...`;
+      refreshDropboxBackups(baseText, !dropboxBackupsCache);
     } else {
+      dropboxBackupsCache = null;
       dropboxStatus.textContent = 'No conectado. Introduce tu App Key y pulsa Conectar.';
       dropboxDisconnectBtn.disabled = true;
+      dropboxImportBtn.disabled = true;
       dropboxConnectBtn.textContent = 'Conectar con Dropbox';
     }
-    dropboxConnectBtn.disabled = !dropboxAppKeyInput.value.trim();
   }
 
   DropboxSync.subscribe(updateDropboxUI);
@@ -306,9 +752,99 @@
     }
   });
 
+  dropboxImportBtn.addEventListener('click', async () => {
+    if (!DropboxSync.isLinked()) {
+      setAppMessage('Conecta Dropbox antes de importar.', 'error');
+      return;
+    }
+    if (!Crypto.isUnlocked()) {
+      setAppMessage('Desbloquea el diario antes de importar.', 'error');
+      showLock('Introduce la contraseña para continuar.');
+      return;
+    }
+    const confirmReplace = window.confirm('Esto reemplazará las entradas locales por el backup que elijas de Dropbox. ¿Continuar?');
+    if (!confirmReplace) return;
+
+    dropboxImportBtn.disabled = true;
+    try {
+      const baseText = getDropboxBaseText(DropboxSync.getStatus());
+      dropboxStatus.textContent = `${baseText} Buscando backups en Dropbox...`;
+      setAppMessage('Consultando backups en Dropbox...', 'muted');
+      const backups = await getDropboxBackups(true);
+      if (!backups.length) {
+        setAppMessage('No se encontraron backups en Dropbox.', 'error');
+        updateDropboxUI();
+        return;
+      }
+      const chosen = await openBackupPicker(backups);
+      if (!chosen) {
+        setAppMessage('Importación cancelada.', 'muted');
+        updateDropboxUI();
+        return;
+      }
+      setAppMessage(`Descargando ${chosen.name}...`, 'muted');
+      const payload = await DropboxSync.downloadBackup(chosen.path_lower || chosen.path_display || chosen.path);
+      let normalized;
+      try {
+        normalized = parseBackupSerialized(payload);
+      } catch (err) {
+        setAppMessage(err.message || 'Backup inválido.', 'error');
+        console.error(err);
+        return;
+      }
+
+      const localEntries = await DB.listEntries();
+      const diff = await buildBackupDiff(localEntries, normalized);
+
+      if (!diff.newEntries.length && !diff.conflicts.length) {
+        const proceed = window.confirm('El backup es idéntico al diario local. ¿Quieres sobrescribir igualmente?');
+        if (!proceed) {
+          setAppMessage('Importación cancelada: no había cambios.', 'muted');
+          updateDropboxUI();
+          return;
+        }
+        const count = await replaceWithBackupEntries(normalized);
+        await autoSyncWithDropbox('restore');
+        setAppMessage(`Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`, 'success');
+        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
+        return;
+      }
+
+      const decision = await openDiffModal(diff, chosen.name);
+      if (!decision) {
+        setAppMessage('Importación cancelada.', 'muted');
+        updateDropboxUI();
+        return;
+      }
+
+      if (decision.action === 'merge') {
+        const merged = await mergeBackupEntries(diff);
+        if (merged === 0) {
+          setAppMessage('No había entradas para fusionar.', 'muted');
+        } else {
+          setAppMessage(`Fusionaste ${merged} entradas del backup.`, 'success');
+        }
+        await autoSyncWithDropbox('merge');
+        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
+      } else {
+        const count = await replaceWithBackupEntries(normalized);
+        await autoSyncWithDropbox('restore');
+        setAppMessage(`Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`, 'success');
+        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
+      }
+    } catch (err) {
+      setAppMessage('No se pudo importar el backup desde Dropbox.', 'error');
+      console.error(err);
+    } finally {
+      dropboxImportBtn.disabled = false;
+    }
+  });
+
   dropboxDisconnectBtn.addEventListener('click', () => {
     DropboxSync.disconnect();
+    dropboxBackupsCache = null;
     setAppMessage('Se desconectó Dropbox.', 'muted');
+    updateDropboxUI();
   });
 
   form.addEventListener('submit', async (event) => {
@@ -345,9 +881,9 @@
       const ciphertext = await Crypto.encryptString(plaintext);
       await DB.saveEntry({ ciphertext, createdAt: timestamp });
       form.reset();
-      renderEntries();
+      await renderEntries();
       if (DropboxSync.isLinked()) {
-        autoSyncWithDropbox();
+        await autoSyncWithDropbox('save');
       } else {
         setAppMessage('Entrada guardada correctamente.', 'success');
       }
@@ -366,9 +902,9 @@
     try {
       await DB.deleteEntry(id);
       setAppMessage('Entrada eliminada.', 'muted');
-      renderEntries();
+      await renderEntries();
       if (DropboxSync.isLinked()) {
-        autoSyncWithDropbox();
+        await autoSyncWithDropbox('delete');
       }
     } catch (err) {
       setAppMessage('No se pudo eliminar la entrada.', 'error');
@@ -394,7 +930,10 @@
         setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
           await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+          dropboxBackupsCache = null;
           setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
+          const state = DropboxSync.getStatus();
+          refreshDropboxBackups(getDropboxBaseText(state), true);
         } catch (err) {
           setAppMessage('Backup descargado, pero Dropbox falló. Revisa la sesión.', 'error');
           console.error(err);
