@@ -56,6 +56,10 @@
     lastActivityAt = null;
   }
 
+  function clearInactivityTimer() {
+    stopInactivityWatcher();
+  }
+
   function ensureInactivityWatcher() {
     if (!Crypto.isUnlocked()) return;
     lastActivityAt = Date.now();
