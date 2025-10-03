@@ -18,6 +18,7 @@
   const dropboxImportBtn = document.getElementById('dropboxImportBtn');
   const dropboxDisconnectBtn = document.getElementById('dropboxDisconnectBtn');
   const dropboxAppKeyInput = document.getElementById('dropboxAppKey');
+  const recoverDropboxBtn = document.getElementById('recoverDropboxBtn');
   const backupModal = document.getElementById('backup-modal');
   const backupList = document.getElementById('backup-list');
   const backupConfirmBtn = document.getElementById('backupConfirmBtn');
@@ -598,8 +599,9 @@
 
   async function handleDropboxImportFlow({ chosen, serialized, parsedBackup, autoTrigger = false }) {
     recordActivity();
-    if (!chosen) return;
+    if (!chosen) return { status: 'cancelled' };
     const baseText = getDropboxBaseText(DropboxSync.getStatus());
+    const wasLocked = appSection.classList.contains('hidden');
     try {
       let payload = serialized;
       if (!payload) {
@@ -613,7 +615,8 @@
       } catch (err) {
         setAppMessage(err.message || 'Backup inválido.', 'error');
         console.error(err);
-        return;
+        if (wasLocked) lockSection.classList.remove('hidden');
+        return { status: 'invalid' };
       }
 
       const backupEntries = backupData.entries;
@@ -630,7 +633,8 @@
         if (!providedPassword) {
           setAppMessage('Sincronización cancelada: se requiere la contraseña del backup.', 'error');
           updateDropboxUI();
-          return;
+          if (wasLocked) lockSection.classList.remove('hidden');
+          return { status: 'cancelled' };
         }
         try {
           session = await Crypto.createSession(backupMeta, providedPassword);
@@ -638,7 +642,8 @@
         } catch (err) {
           setAppMessage('La contraseña no coincide con este backup. No se importó nada.', 'error');
           console.error(err);
-          return;
+          if (wasLocked) lockSection.classList.remove('hidden');
+          return { status: 'invalid_password' };
         }
       }
 
@@ -654,18 +659,21 @@
       if (!hasChanges) {
         setAppMessage('El backup remoto coincide con tu diario. No se aplicaron cambios.', 'muted');
         updateDropboxUI();
-        return;
+        if (wasLocked) lockSection.classList.remove('hidden');
+        return { status: 'no_changes' };
       }
 
+      if (wasLocked) lockSection.classList.add('hidden');
       const decision = await openDiffModal(diff, chosen.name);
       if (!decision) {
         setAppMessage('Importación cancelada.', 'muted');
         updateDropboxUI();
-        return;
+        if (wasLocked) lockSection.classList.remove('hidden');
+        return { status: 'cancelled' };
       }
 
       let adoption = { migrated: 0 };
-      const autoContext = decision.action === 'merge' ? 'merge' : 'restore';
+      let resultStatus = decision.action;
 
       if (decision.action === 'merge') {
         const mergeResult = await mergeBackupEntries(diff);
@@ -698,17 +706,27 @@
           message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
         }
         setAppMessage(message, 'success');
+        resultStatus = 'replace';
       }
 
-      await autoSyncWithDropbox(autoContext);
+      if (wasLocked && Crypto.isUnlocked()) {
+        showApp();
+      } else if (wasLocked && !Crypto.isUnlocked()) {
+        lockSection.classList.remove('hidden');
+      }
+
+      await autoSyncWithDropbox(decision.action === 'merge' ? 'merge' : 'restore');
       await refreshDropboxBackups(baseText, true);
       updateDropboxUI();
       recordActivity();
+      return { status: resultStatus, adoption };
     } catch (err) {
       console.error('handleDropboxImportFlow error', err);
       if (!autoTrigger) {
         setAppMessage('No se pudo importar el backup desde Dropbox.', 'error');
       }
+      if (wasLocked) lockSection.classList.remove('hidden');
+      return { status: 'error', error: err };
     }
   }
 
@@ -865,6 +883,61 @@
       console.error('Sincronización automática falló', err);
     }
   }
+
+  dropboxConnectBtn.addEventListener('click', async () => {
+    const key = dropboxAppKeyInput.value.trim();
+    if (!key) {
+      setAppMessage('Introduce tu App Key de Dropbox para continuar.', 'error');
+      return;
+    }
+    try {
+      setAppMessage('Redirigiendo a Dropbox para autorizar...', 'muted');
+      await DropboxSync.connect(key);
+    } catch (err) {
+      setAppMessage('No se pudo iniciar la conexión con Dropbox.', 'error');
+      console.error(err);
+    }
+  });
+
+  recoverDropboxBtn.addEventListener('click', async () => {
+    if (!DropboxSync.isLinked()) {
+      setLockMessage('Conecta Dropbox en este navegador para recuperar el diario.');
+      return;
+    }
+    recoverDropboxBtn.disabled = true;
+    try {
+      setLockMessage('Buscando backups en Dropbox...');
+      const backups = await getDropboxBackups(true);
+      if (!backups.length) {
+        setLockMessage('No hay backups disponibles en Dropbox.');
+        return;
+      }
+      lockSection.classList.add('hidden');
+      const chosen = await openBackupPicker(backups);
+      if (!chosen) {
+        lockSection.classList.remove('hidden');
+        setLockMessage('Recuperación cancelada.');
+        return;
+      }
+      const result = await handleDropboxImportFlow({ chosen, autoTrigger: true });
+      if (!result || result.status === 'cancelled') {
+        lockSection.classList.remove('hidden');
+        setLockMessage('Recuperación cancelada.');
+      } else if (Crypto.isUnlocked()) {
+        setLockMessage('');
+        showApp();
+      } else {
+        lockSection.classList.remove('hidden');
+        setLockMessage('El backup se importó, pero debes introducir la contraseña correcta para desbloquear.');
+      }
+    } catch (err) {
+      console.error('Recuperación desde Dropbox falló', err);
+      lockSection.classList.remove('hidden');
+      setLockMessage('No se pudo recuperar el backup desde Dropbox. Revisa la consola.');
+    } finally {
+      recoverDropboxBtn.disabled = false;
+    }
+  });
 
   dropboxImportBtn.addEventListener('click', async () => {
     if (!DropboxSync.isLinked()) {

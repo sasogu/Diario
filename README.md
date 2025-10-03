@@ -7,7 +7,7 @@ Proyecto PWA minimal para llevar un diario cifrado localmente.
 - Entradas y fotos almacenadas cifradas en IndexedDB.
 - Exportación local a JSON, sincronización automática con Dropbox e importación directa (comparar, fusionar o reemplazar) desde Dropbox.
 - Al abrir la app se detecta automáticamente si hay un backup más reciente en Dropbox y se ofrece fusionar/reemplazar los cambios.
-- Bloqueo automático tras 5 minutos sin interacción para proteger el diario en dispositivos compartidos.
+- Bloqueo automático tras 5 minutos sin interacción y botón de recuperación desde Dropbox directamente en la pantalla de bloqueo.
 - Historial de backups en Dropbox con selección de versión y sincronización automática tras restaurar.
 - Service Worker con caché dinámico y soporte offline.
 - UI responsive con bloqueo manual de sesión.
