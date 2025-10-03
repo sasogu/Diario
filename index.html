@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Diario PWA</title>
-  <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header>
@@ -34,7 +34,7 @@
         </label>
         <div class="row">
           <button type="submit">Guardar</button>
-          <button type="button" id="syncBtn">Sincronizar backup</button>
+          <button type="button" id="syncBtn">Descargar backup</button>
           <button type="button" id="logoutBtn">Bloquear</button>
         </div>
       </form>
@@ -59,13 +59,13 @@
     </section>
   </main>
 
-  <script src="/crypto.js"></script>
-  <script src="/db.js"></script>
-  <script src="/dropbox.js"></script>
-  <script src="/app.js"></script>
+  <script src="crypto.js"></script>
+  <script src="db.js"></script>
+  <script src="dropbox.js"></script>
+  <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(console.error);
+      navigator.serviceWorker.register('sw.js').catch(console.error);
     }
   </script>
 </body>

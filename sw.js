@@ -1,20 +1,24 @@
-const CACHE_NAME = 'diario-v0.0.2';
-const ASSETS = [
-  '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/db.js',
-  '/crypto.js',
-  '/dropbox.js',
-  '/manifest.json',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png'
+const CACHE_NAME = 'diario-v4';
+const CORE_ASSETS = [
+  'index.html',
+  'styles.css',
+  'app.js',
+  'db.js',
+  'crypto.js',
+  'dropbox.js',
+  'manifest.json',
+  'icons/icon-192.png',
+  'icons/icon-512.png'
 ];
 
+function toAbsoluteUrl(path) {
+  return new URL(path, self.location).toString();
+}
+
 self.addEventListener('install', (event) => {
+  const assets = CORE_ASSETS.map(toAbsoluteUrl);
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(assets))
   );
   self.skipWaiting();
 });
@@ -33,7 +37,7 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html'))
+      fetch(request).catch(() => caches.match(toAbsoluteUrl('index.html')))
     );
     return;
   }

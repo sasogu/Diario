@@ -37,7 +37,6 @@
   function showApp() {
     lockSection.classList.add('hidden');
     appSection.classList.remove('hidden');
-    setAppMessage('Listo para guardar nuevas entradas.');
     document.getElementById('title').focus();
     renderEntries();
   }
@@ -54,6 +53,41 @@
   function formatDate(timestamp) {
     if (!timestamp) return 'Sin fecha';
     return new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp));
+  }
+
+  async function collectBackupPayload() {
+    const items = await DB.listEntries();
+    const exported = items.map((item) => ({
+      id: item.id,
+      createdAt: item.createdAt,
+      ciphertext: item.ciphertext
+    }));
+    const serialized = JSON.stringify(exported, null, 2);
+    const filename = `diario-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    return { serialized, filename };
+  }
+
+  function downloadBackupFile(filename, serialized) {
+    const blob = new Blob([serialized], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function autoSyncWithDropbox() {
+    try {
+      setAppMessage('Entrada guardada. Preparando sincronización con Dropbox...', 'muted');
+      const payload = await collectBackupPayload();
+      setAppMessage('Entrada guardada. Subiendo backup a Dropbox...', 'muted');
+      await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+      setAppMessage('Entrada guardada y sincronizada con Dropbox.', 'success');
+    } catch (err) {
+      console.error('Sincronización automática de Dropbox falló', err);
+      setAppMessage('Entrada guardada. Dropbox no se sincronizó; revisa tu conexión.', 'error');
+    }
   }
 
   function updateDropboxUI(state = DropboxSync.getStatus()) {
@@ -244,7 +278,7 @@
   logoutBtn.addEventListener('click', () => {
     Crypto.lock();
     form.reset();
-    setAppMessage('Sesión bloqueada. Vuelve a introducir la contraseña.');
+    setAppMessage('Sesión bloqueada. Vuelve a introducir la contraseña.', 'muted');
     showLock('Sesión bloqueada.');
   });
 
@@ -311,8 +345,12 @@
       const ciphertext = await Crypto.encryptString(plaintext);
       await DB.saveEntry({ ciphertext, createdAt: timestamp });
       form.reset();
-      setAppMessage('Entrada guardada correctamente.', 'success');
       renderEntries();
+      if (DropboxSync.isLinked()) {
+        autoSyncWithDropbox();
+      } else {
+        setAppMessage('Entrada guardada correctamente.', 'success');
+      }
     } catch (err) {
       setAppMessage('No se pudo guardar la entrada. Revisa la consola.', 'error');
       console.error(err);
@@ -327,8 +365,11 @@
     button.disabled = true;
     try {
       await DB.deleteEntry(id);
-      setAppMessage('Entrada eliminada.');
+      setAppMessage('Entrada eliminada.', 'muted');
       renderEntries();
+      if (DropboxSync.isLinked()) {
+        autoSyncWithDropbox();
+      }
     } catch (err) {
       setAppMessage('No se pudo eliminar la entrada.', 'error');
       console.error(err);
@@ -346,33 +387,20 @@
     const originalText = syncBtn.textContent;
     syncBtn.textContent = 'Generando backup...';
     try {
-      const items = await DB.listEntries();
-      const exported = items.map((item) => ({
-        id: item.id,
-        createdAt: item.createdAt,
-        ciphertext: item.ciphertext
-      }));
-      const serialized = JSON.stringify(exported, null, 2);
-      const filename = `diario-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      const blob = new Blob([serialized], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
-
+      setAppMessage('Generando backup local...', 'muted');
+      const payload = await collectBackupPayload();
+      downloadBackupFile(payload.filename, payload.serialized);
       if (DropboxSync.isLinked()) {
-        setAppMessage('Subiendo el backup a Dropbox...', 'muted');
+        setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
-          await DropboxSync.uploadBackup(filename, serialized);
-          setAppMessage('Backup sincronizado con Dropbox y descargado localmente.', 'success');
+          await DropboxSync.uploadBackup(payload.filename, payload.serialized);
+          setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
         } catch (err) {
-          setAppMessage('Backup local listo, pero Dropbox falló. Revisa tu sesión o conexión.', 'error');
+          setAppMessage('Backup descargado, pero Dropbox falló. Revisa la sesión.', 'error');
           console.error(err);
         }
       } else {
-        setAppMessage('Backup generado (JSON). Conecta Dropbox para sincronizarlo automáticamente.', 'success');
+        setAppMessage('Backup descargado (JSON). Conecta Dropbox para sincronizar automáticamente.', 'success');
       }
     } catch (err) {
       setAppMessage('No se pudo generar el backup.', 'error');
