@@ -111,6 +111,54 @@
     setupAutoSyncPrompt();
   }
 
+  setBtn.addEventListener('click', async () => {
+    const password = passwordInput.value.trim();
+    if (password.length < 6) {
+      setLockMessage('Usa al menos 6 caracteres para mayor seguridad.');
+      return;
+    }
+    setLockMessage('Guardando contraseña...');
+    setBtn.disabled = unlockBtn.disabled = true;
+    try {
+      await Crypto.setPassword(password);
+      passwordInput.value = '';
+      setLockMessage('Contraseña actualizada. Diario desbloqueado!');
+      recordActivity();
+      showApp();
+    } catch (err) {
+      console.error('Error guardando contraseña', err);
+      setLockMessage('No se pudo guardar la contraseña. Inténtalo de nuevo.');
+    } finally {
+      setBtn.disabled = unlockBtn.disabled = false;
+    }
+  });
+
+  unlockBtn.addEventListener('click', async () => {
+    const password = passwordInput.value.trim();
+    if (!password) {
+      setLockMessage('Introduce la contraseña.');
+      return;
+    }
+    setLockMessage('Comprobando contraseña...');
+    setBtn.disabled = unlockBtn.disabled = true;
+    try {
+      const ok = await Crypto.tryUnlock(password);
+      if (ok) {
+        passwordInput.value = '';
+        setLockMessage('');
+        recordActivity();
+        showApp();
+      } else {
+        setLockMessage('Contraseña incorrecta.');
+      }
+    } catch (err) {
+      console.error('Error al desbloquear', err);
+      setLockMessage('Ocurrió un error al comprobar la contraseña.');
+    } finally {
+      setBtn.disabled = unlockBtn.disabled = false;
+    }
+  });
+
   async function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
