@@ -303,7 +303,10 @@
         diffNewList,
         newEntries,
         'No hay entradas nuevas en este backup.',
-        (item) => createDiffEntry(item.info.title, formatDate(item.info.createdAt), '')
+        (item) => {
+          const label = item.info.title + (item.info.ok ? '' : ' (sin descifrar)');
+          return createDiffEntry(label, formatDate(item.info.createdAt), item.info.ok ? '' : 'error');
+        }
       );
 
       renderDiffList(
@@ -312,18 +315,26 @@
         'Sin conflictos detectados.',
         (item) => {
           const localInfo = {
-            title: item.local.info.title,
+            title: item.local.info.title + (item.local.info.ok ? '' : ' (sin descifrar)'),
             meta: formatDate(item.local.info.createdAt)
           };
           const backupInfo = {
-            title: item.backup.info.title,
+            title: item.backup.info.title + (item.backup.info.ok ? '' : ' (sin descifrar)'),
             meta: formatDate(item.backup.info.createdAt)
           };
           return createConflictEntry(localInfo, backupInfo);
         }
       );
 
-      diffMergeBtn.disabled = newEntries.length === 0 && conflicts.length === 0;
+      const mergeDisabled =
+        !newEntries.length && !conflicts.length ? true :
+        newEntries.some((item) => !item.info.ok) ||
+        conflicts.some((item) => !item.backup.info.ok || !item.local.info.ok);
+
+      diffMergeBtn.disabled = mergeDisabled;
+      if (mergeDisabled && (newEntries.length || conflicts.length)) {
+        diffIdentical.textContent += ' · Algunas entradas no se pudieron descifrar; solo se permite reemplazar.';
+      }
       diffModal.classList.remove('hidden');
       diffModal.setAttribute('aria-hidden', 'false');
     });
@@ -361,6 +372,7 @@
         title: (data.title && data.title.trim()) || 'Sin título',
         createdAt: data.createdAt || entry.createdAt,
         content: data.content || '',
+        payload: data,
         ok: true
       };
     } catch (err) {
@@ -369,6 +381,7 @@
         title: 'Entrada cifrada',
         createdAt: entry.createdAt,
         content: '',
+        payload: null,
         ok: false
       };
     }
@@ -432,26 +445,51 @@
   }
 
   async function mergeBackupEntries(diff) {
-    let mergedCount = 0;
-    const insertEntry = async (entry) => {
-      const record = {
-        ciphertext: entry.ciphertext,
-        createdAt: entry.createdAt || Date.now()
-      };
-      await DB.saveEntry(record);
-      mergedCount += 1;
+    let added = 0;
+    let replaced = 0;
+
+    const ensurePayload = (info, entry) => {
+      if (!info.ok || !info.payload) {
+        throw new Error('No se pudo descifrar una de las entradas del backup. Usa "Reemplazar" si deseas continuar.');
+      }
+      const payload = { ...info.payload };
+      delete payload.id;
+      delete payload.ciphertext;
+      const createdAt = Number(payload.createdAt) || entry.createdAt || Date.now();
+      payload.createdAt = createdAt;
+      return { payload, createdAt };
+    };
+
+    const addEntry = async (entryWrapper) => {
+      const { payload, createdAt } = ensurePayload(entryWrapper.info, entryWrapper.entry);
+      const ciphertext = await Crypto.encryptString(JSON.stringify(payload));
+      await DB.saveEntry({ ciphertext, createdAt });
+      added += 1;
+    };
+
+    const replaceEntry = async (conflictWrapper) => {
+      const { payload, createdAt } = ensurePayload(conflictWrapper.backup.info, conflictWrapper.backup.entry);
+      const ciphertext = await Crypto.encryptString(JSON.stringify(payload));
+      const localEntry = conflictWrapper.local.entry;
+      const targetId = Number(localEntry.id);
+      if (Number.isFinite(targetId)) {
+        await DB.putEntry({ id: targetId, ciphertext, createdAt });
+      } else {
+        await DB.saveEntry({ ciphertext, createdAt });
+      }
+      replaced += 1;
     };
 
     for (const item of diff.newEntries) {
-      await insertEntry(item.entry);
+      await addEntry(item);
     }
 
     for (const item of diff.conflicts) {
-      await insertEntry(item.backup.entry);
+      await replaceEntry(item);
     }
 
     await renderEntries();
-    return mergedCount;
+    return { added, replaced };
   }
 
   async function getDropboxBackups(force = false) {
@@ -818,14 +856,18 @@
       }
 
       if (decision.action === 'merge') {
-        const merged = await mergeBackupEntries(diff);
-        if (merged === 0) {
-          setAppMessage('No había entradas para fusionar.', 'muted');
-        } else {
-          setAppMessage(`Fusionaste ${merged} entradas del backup.`, 'success');
+        try {
+          const mergeResult = await mergeBackupEntries(diff);
+          const parts = [];
+          if (mergeResult.added) parts.push(`${mergeResult.added} nuevas`);
+          if (mergeResult.replaced) parts.push(`${mergeResult.replaced} actualizadas`);
+          setAppMessage(parts.length ? `Fusionaste ${parts.join(' y ')} entradas del backup.` : 'No había entradas para fusionar.', parts.length ? 'success' : 'muted');
+          await autoSyncWithDropbox('merge');
+          await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
+        } catch (mergeErr) {
+          setAppMessage(mergeErr.message || 'No se pudo fusionar el backup.', 'error');
+          console.error(mergeErr);
         }
-        await autoSyncWithDropbox('merge');
-        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
       } else {
         const count = await replaceWithBackupEntries(normalized);
         await autoSyncWithDropbox('restore');

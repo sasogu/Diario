@@ -80,6 +80,17 @@ const DB = (function () {
       } catch (err) {
         reject(err);
       }
+    }),
+    putEntry: (entry) => new Promise((resolve, reject) => {
+      try {
+        if (!entry || !Number.isFinite(entry.id)) throw new Error('putEntry requiere un id numérico');
+        const store = getStore('readwrite');
+        const request = store.put(entry);
+        request.onsuccess = () => resolve();
+        request.onerror = (event) => reject(event.target.error);
+      } catch (err) {
+        reject(err);
+      }
     })
   };
 })();

@@ -292,6 +292,14 @@ small {
   gap: 0.3rem;
 }
 
+.diff-entry.error {
+  border-color: rgba(185, 28, 28, 0.45);
+}
+
+.diff-entry.error strong {
+  color: var(--error);
+}
+
 .diff-entry strong {
   font-size: 0.95rem;
 }
