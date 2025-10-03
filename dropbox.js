@@ -131,7 +131,7 @@ const DropboxSync = (function(){
         }
       });
       if (!response.ok) {
-        if (response.status === 401) {
+        if (response.status === 401 || response.status === 400) {
           await handleAuthFailure();
         }
         return;
@@ -279,6 +279,9 @@ const DropboxSync = (function(){
 
       if (!response.ok) {
         const errText = await response.text();
+        if (response.status === 401 || response.status === 400) {
+          await handleAuthFailure();
+        }
         throw new Error(`No se pudo listar backups en Dropbox: ${errText}`);
       }
 
@@ -308,7 +311,7 @@ const DropboxSync = (function(){
       }
     });
     if (!response.ok) {
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 400) {
         await handleAuthFailure();
       }
       const errText = await response.text();

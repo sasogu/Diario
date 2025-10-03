@@ -657,7 +657,20 @@
       try {
         decrypted = await Crypto.decryptString(item.ciphertext);
       } catch (err) {
-        entryNode.innerHTML = '<p class="error">No se pudo descifrar esta entrada. Prueba con la contraseña correcta y vuelve a guardar.</p>';
+        entryNode.innerHTML = '';
+        const errorMsg = document.createElement('p');
+        errorMsg.className = 'error';
+        errorMsg.textContent = 'No se pudo descifrar esta entrada. Puedes intentar eliminarla o importar un backup reciente.';
+        entryNode.appendChild(errorMsg);
+        const actions = document.createElement('div');
+        actions.className = 'entry-actions';
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.dataset.action = 'delete';
+        deleteBtn.dataset.id = item.id;
+        deleteBtn.textContent = 'Eliminar entrada corrupta';
+        actions.appendChild(deleteBtn);
+        entryNode.appendChild(actions);
         entriesContainer.appendChild(entryNode);
         console.error('Fallo al descifrar entrada', err);
         continue;
