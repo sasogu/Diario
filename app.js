@@ -39,34 +39,45 @@
   let latestRemoteMetadata = null;
   let autoSyncObservedRevision = null;
   const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
-  let inactivityTimer = null;
+  const ACTIVITY_CHECK_INTERVAL = 15 * 1000;
+  let lastActivityAt = null;
+  let inactivityInterval = null;
 
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
   if (diffReplaceBtn) diffReplaceBtn.disabled = false;
 
-  function clearInactivityTimer() {
-    if (inactivityTimer) {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = null;
+  function stopInactivityWatcher() {
+    if (inactivityInterval) {
+      clearInterval(inactivityInterval);
+      inactivityInterval = null;
     }
+    lastActivityAt = null;
   }
 
-  function scheduleInactivityTimer() {
-    clearInactivityTimer();
+  function ensureInactivityWatcher() {
     if (!Crypto.isUnlocked()) return;
-    inactivityTimer = setTimeout(() => {
-      inactivityTimer = null;
-      Crypto.lock();
-      form.reset();
-      setAppMessage('Sesión caducada por inactividad.', 'muted');
-      showLock('Sesión caducada por inactividad.');
-    }, SESSION_TIMEOUT_MS);
+    lastActivityAt = Date.now();
+    if (inactivityInterval) return;
+    inactivityInterval = setInterval(() => {
+      if (!Crypto.isUnlocked()) {
+        stopInactivityWatcher();
+        return;
+      }
+      if (lastActivityAt && Date.now() - lastActivityAt >= SESSION_TIMEOUT_MS) {
+        stopInactivityWatcher();
+        Crypto.lock();
+        form.reset();
+        setAppMessage('Sesión caducada por inactividad.', 'muted');
+        showLock('Sesión caducada por inactividad.');
+      }
+    }, ACTIVITY_CHECK_INTERVAL);
   }
 
-  function beatInactivityTimer() {
+  function recordActivity() {
     if (!Crypto.isUnlocked()) return;
-    scheduleInactivityTimer();
+    lastActivityAt = Date.now();
+    ensureInactivityWatcher();
   }
 
   function setLockMessage(text) {
@@ -79,7 +90,7 @@
   }
 
   function showLock(message) {
-    clearInactivityTimer();
+    stopInactivityWatcher();
     if (message) setLockMessage(message);
     lockSection.classList.remove('hidden');
     appSection.classList.add('hidden');
@@ -91,7 +102,7 @@
     appSection.classList.remove('hidden');
     document.getElementById('title').focus();
     renderEntries();
-    scheduleInactivityTimer();
+    ensureInactivityWatcher();
     setupAutoSyncPrompt();
   }
 
@@ -586,7 +597,7 @@
   }
 
   async function handleDropboxImportFlow({ chosen, serialized, parsedBackup, autoTrigger = false }) {
-    beatInactivityTimer();
+    recordActivity();
     if (!chosen) return;
     const baseText = getDropboxBaseText(DropboxSync.getStatus());
     try {
@@ -692,7 +703,7 @@
       await autoSyncWithDropbox(autoContext);
       await refreshDropboxBackups(baseText, true);
       updateDropboxUI();
-      beatInactivityTimer();
+      recordActivity();
     } catch (err) {
       console.error('handleDropboxImportFlow error', err);
       if (!autoTrigger) {
@@ -870,7 +881,7 @@
 
     dropboxImportBtn.disabled = true;
     try {
-      beatInactivityTimer();
+      recordActivity();
       dropboxStatus.textContent = `${getDropboxBaseText(DropboxSync.getStatus())} Buscando backups en Dropbox...`;
       setAppMessage('Consultando backups en Dropbox...', 'muted');
       const backups = await getDropboxBackups(true);
@@ -909,7 +920,7 @@
       showLock('La sesión se cerró.');
       return;
     }
-    beatInactivityTimer();
+    recordActivity();
 
     const title = document.getElementById('title').value.trim();
     const content = document.getElementById('content').value.trim();
@@ -956,7 +967,7 @@
     if (!Number.isFinite(id)) return;
     button.disabled = true;
     try {
-      beatInactivityTimer();
+      recordActivity();
       await DB.deleteEntry(id);
       setAppMessage('Entrada eliminada.', 'muted');
       await renderEntries();
@@ -986,7 +997,7 @@
       if (DropboxSync.isLinked()) {
         setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
-          beatInactivityTimer();
+          recordActivity();
           await DropboxSync.uploadBackup(backup.filename, backup.serialized);
           dropboxBackupsCache = null;
           setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
@@ -1008,15 +1019,18 @@
     }
   });
 
-  ['click', 'keydown', 'pointerdown', 'touchstart'].forEach((evt) => {
-    document.addEventListener(evt, beatInactivityTimer, true);
+  ['click', 'keydown', 'pointerdown', 'touchstart', 'mousemove'].forEach((evt) => {
+    document.addEventListener(evt, recordActivity, true);
   });
+
+  window.addEventListener('focus', recordActivity);
+  window.addEventListener('blur', stopInactivityWatcher);
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      clearInactivityTimer();
+      stopInactivityWatcher();
     } else {
-      beatInactivityTimer();
+      recordActivity();
     }
   });
 
