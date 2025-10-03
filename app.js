@@ -154,7 +154,6 @@
 
   async function replaceWithBackupEntries(entries) {
     await DB.replaceEntries(entries);
-    await renderEntries();
     return entries.length;
   }
 
@@ -501,7 +500,6 @@
       replaced += 1;
     }
 
-    await renderEntries();
     return { added, replaced };
   }
 
@@ -954,6 +952,7 @@
             return;
           }
         }
+        await renderEntries();
         await autoSyncWithDropbox('restore');
         let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
         if (adoption.migrated) {
@@ -993,6 +992,7 @@
 
           const summary = messageParts.length ? `Fusionaste ${messageParts.join(', ')}.` : 'No había entradas para fusionar.';
           setAppMessage(summary, messageParts.length ? 'success' : 'muted');
+          await renderEntries();
           await autoSyncWithDropbox('merge');
           await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
         } catch (mergeErr) {
@@ -1011,6 +1011,7 @@
             return;
           }
         }
+        await renderEntries();
         await autoSyncWithDropbox('restore');
         let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
         if (adoption.migrated) {
