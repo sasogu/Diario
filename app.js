@@ -620,7 +620,8 @@
     if (authResult.status === 'linked') {
       setAppMessage('Dropbox conectado correctamente.', 'success');
     } else if (authResult.status === 'error') {
-      setAppMessage('No se pudo completar la autorización de Dropbox. Reintenta.', 'error');
+      const detail = authResult.detail ? ` Detalle: ${String(authResult.detail).slice(0, 140)}.` : '';
+      setAppMessage(`No se pudo completar la autorización de Dropbox. Reintenta.${detail}`, 'error');
     }
     DropboxSync.markAuthNoticeHandled();
   }

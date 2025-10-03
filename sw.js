@@ -1,4 +1,4 @@
-const CACHE_NAME = 'diario-v8';
+const CACHE_NAME = 'diario-v9';
 const CORE_ASSETS = [
   'index.html',
   'styles.css',

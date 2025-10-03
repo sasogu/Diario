@@ -128,11 +128,14 @@ const DropboxSync = (function(){
         headers: {
           Authorization: `Bearer ${tokens.accessToken}`,
           'Content-Type': 'application/json'
-        }
+        },
+        body: 'null'
       });
       if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        console.warn('Dropbox get_current_account falló', response.status, errText);
         if (response.status === 401 || response.status === 400) {
-          await handleAuthFailure();
+          await handleAuthFailure(errText);
         }
         return;
       }
@@ -145,9 +148,9 @@ const DropboxSync = (function(){
     }
   }
 
-  async function handleAuthFailure(){
+  async function handleAuthFailure(detail){
     saveTokens(null);
-    lastAuthResult = { status: 'error', reason: 'auth_failure' };
+    lastAuthResult = { status: 'error', reason: 'auth_failure', detail };
   }
 
   async function refreshAccessToken(){
@@ -165,8 +168,8 @@ const DropboxSync = (function(){
       body
     });
     if (!response.ok) {
-      await handleAuthFailure();
-      const errText = await response.text();
+      const errText = await response.text().catch(() => '');
+      await handleAuthFailure(errText);
       throw new Error(`Refresh token Dropbox falló: ${errText}`);
     }
     const data = await response.json();
@@ -242,10 +245,11 @@ const DropboxSync = (function(){
       body: jsonString
     });
     if (!response.ok) {
-      if (response.status === 401) {
-        await handleAuthFailure();
+      const errText = await response.text().catch(() => '');
+      console.warn('Dropbox upload falló', response.status, errText);
+      if (response.status === 401 || response.status === 400) {
+        await handleAuthFailure(errText);
       }
-      const errText = await response.text();
       throw new Error(`La subida a Dropbox falló: ${errText}`);
     }
     const metadata = await response.json();
@@ -278,9 +282,10 @@ const DropboxSync = (function(){
       }
 
       if (!response.ok) {
-        const errText = await response.text();
+        const errText = await response.text().catch(() => '');
+        console.warn('Dropbox list_folder falló', response.status, errText);
         if (response.status === 401 || response.status === 400) {
-          await handleAuthFailure();
+          await handleAuthFailure(errText);
         }
         throw new Error(`No se pudo listar backups en Dropbox: ${errText}`);
       }
@@ -311,10 +316,11 @@ const DropboxSync = (function(){
       }
     });
     if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn('Dropbox download falló', response.status, errText);
       if (response.status === 401 || response.status === 400) {
-        await handleAuthFailure();
+        await handleAuthFailure(errText);
       }
-      const errText = await response.text();
       throw new Error(`No se pudo descargar el backup: ${errText}`);
     }
     return response.text();
