@@ -6,6 +6,8 @@ Proyecto PWA minimal para llevar un diario cifrado localmente.
 - Acceso protegido por contraseña (PBKDF2 + AES-GCM) con verificación y compatibilidad con versiones anteriores.
 - Entradas y fotos almacenadas cifradas en IndexedDB.
 - Exportación local a JSON, sincronización automática con Dropbox e importación directa (comparar, fusionar o reemplazar) desde Dropbox.
+- Al abrir la app se detecta automáticamente si hay un backup más reciente en Dropbox y se ofrece fusionar/reemplazar los cambios.
+- Bloqueo automático tras 5 minutos sin interacción para proteger el diario en dispositivos compartidos.
 - Historial de backups en Dropbox con selección de versión y sincronización automática tras restaurar.
 - Service Worker con caché dinámico y soporte offline.
 - UI responsive con bloqueo manual de sesión.
@@ -32,6 +34,5 @@ Proyecto PWA minimal para llevar un diario cifrado localmente.
 - El botón "Bloquear" limpia la clave de la sesión actual.
 
 ### Próximos pasos sugeridos
-- Añadir caducidad de sesión o bloqueo automático tras inactividad.
+- Añadir posibilidad establecer tiempo de caducidad de sesión o bloqueo automático tras inactividad. Ahora 5 minutos.
 - Añadir importación del backup JSON local (archivo manual) para usos sin conexión a Dropbox.
-- Permitir comparar diferencias entre versiones y fusionar entradas en lugar de sobrescribirlas.

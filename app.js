@@ -36,10 +36,38 @@
   let pickerOptions = [];
   let pickerSelectedIndex = null;
   let diffResolve = null;
+  let latestRemoteMetadata = null;
+  let autoSyncObservedRevision = null;
+  const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+  let inactivityTimer = null;
 
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
   if (diffReplaceBtn) diffReplaceBtn.disabled = false;
+
+  function clearInactivityTimer() {
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+  }
+
+  function scheduleInactivityTimer() {
+    clearInactivityTimer();
+    if (!Crypto.isUnlocked()) return;
+    inactivityTimer = setTimeout(() => {
+      inactivityTimer = null;
+      Crypto.lock();
+      form.reset();
+      setAppMessage('Sesión caducada por inactividad.', 'muted');
+      showLock('Sesión caducada por inactividad.');
+    }, SESSION_TIMEOUT_MS);
+  }
+
+  function beatInactivityTimer() {
+    if (!Crypto.isUnlocked()) return;
+    scheduleInactivityTimer();
+  }
 
   function setLockMessage(text) {
     lockMsg.textContent = text || '';
@@ -51,6 +79,7 @@
   }
 
   function showLock(message) {
+    clearInactivityTimer();
     if (message) setLockMessage(message);
     lockSection.classList.remove('hidden');
     appSection.classList.add('hidden');
@@ -62,6 +91,8 @@
     appSection.classList.remove('hidden');
     document.getElementById('title').focus();
     renderEntries();
+    scheduleInactivityTimer();
+    setupAutoSyncPrompt();
   }
 
   async function blobToDataUrl(blob) {
@@ -554,6 +585,122 @@
     return { migrated: updates.length };
   }
 
+  async function handleDropboxImportFlow({ chosen, serialized, parsedBackup, autoTrigger = false }) {
+    beatInactivityTimer();
+    if (!chosen) return;
+    const baseText = getDropboxBaseText(DropboxSync.getStatus());
+    try {
+      let payload = serialized;
+      if (!payload) {
+        setAppMessage(`Descargando ${chosen.name}...`, 'muted');
+        payload = await DropboxSync.downloadBackup(chosen.path_lower || chosen.path_display || chosen.path);
+      }
+
+      let backupData = parsedBackup;
+      try {
+        if (!backupData) backupData = parseBackupSerialized(payload);
+      } catch (err) {
+        setAppMessage(err.message || 'Backup inválido.', 'error');
+        console.error(err);
+        return;
+      }
+
+      const backupEntries = backupData.entries;
+      const backupMeta = backupData.meta;
+      const originalState = await Crypto.exportState().catch(() => null);
+      let session = null;
+      let backupPassword = null;
+
+      if (backupMeta && backupMeta.salt && backupMeta.verifier) {
+        const promptMsg = autoTrigger
+          ? 'Introduce la contraseña del backup encontrado en Dropbox para sincronizarlo (normalmente la misma del diario).'
+          : 'Introduce la contraseña usada en este backup (normalmente la misma que usas en el diario).';
+        const providedPassword = window.prompt(promptMsg);
+        if (!providedPassword) {
+          setAppMessage('Sincronización cancelada: se requiere la contraseña del backup.', 'error');
+          updateDropboxUI();
+          return;
+        }
+        try {
+          session = await Crypto.createSession(backupMeta, providedPassword);
+          backupPassword = providedPassword;
+        } catch (err) {
+          setAppMessage('La contraseña no coincide con este backup. No se importó nada.', 'error');
+          console.error(err);
+          return;
+        }
+      }
+
+      const localEntries = await DB.listEntries();
+      const diff = await buildBackupDiff(localEntries, backupEntries, session ? session.decryptString : undefined);
+
+      const localCount = localEntries.length;
+      const hasChanges =
+        diff.newEntries.length ||
+        diff.conflicts.length ||
+        diff.identicalCount !== backupEntries.length ||
+        localCount !== backupEntries.length;
+      if (!hasChanges) {
+        setAppMessage('El backup remoto coincide con tu diario. No se aplicaron cambios.', 'muted');
+        updateDropboxUI();
+        return;
+      }
+
+      const decision = await openDiffModal(diff, chosen.name);
+      if (!decision) {
+        setAppMessage('Importación cancelada.', 'muted');
+        updateDropboxUI();
+        return;
+      }
+
+      let adoption = { migrated: 0 };
+      const autoContext = decision.action === 'merge' ? 'merge' : 'restore';
+
+      if (decision.action === 'merge') {
+        const mergeResult = await mergeBackupEntries(diff);
+        await renderEntries();
+        if (session && backupMeta) {
+          adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState).catch((stateErr) => {
+            setAppMessage(stateErr.message, 'error');
+            console.error(stateErr);
+            throw stateErr;
+          });
+        }
+        const parts = [];
+        if (mergeResult.added) parts.push(`${mergeResult.added} nuevas`);
+        if (mergeResult.replaced) parts.push(`${mergeResult.replaced} actualizadas`);
+        if (adoption.migrated) parts.push(`${adoption.migrated} migradas a la clave compartida`);
+        const summary = parts.length ? `Fusionaste ${parts.join(', ')}.` : 'No había entradas para fusionar.';
+        setAppMessage(summary, parts.length ? 'success' : 'muted');
+      } else {
+        const count = await replaceWithBackupEntries(backupEntries);
+        await renderEntries();
+        if (session && backupMeta) {
+          adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState).catch((stateErr) => {
+            setAppMessage(stateErr.message, 'error');
+            console.error(stateErr);
+            throw stateErr;
+          });
+        }
+        let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
+        if (adoption.migrated) {
+          message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
+        }
+        setAppMessage(message, 'success');
+      }
+
+      await autoSyncWithDropbox(autoContext);
+      await refreshDropboxBackups(baseText, true);
+      updateDropboxUI();
+      beatInactivityTimer();
+    } catch (err) {
+      console.error('handleDropboxImportFlow error', err);
+      if (!autoTrigger) {
+        setAppMessage('No se pudo importar el backup desde Dropbox.', 'error');
+      }
+    }
+  }
+
   async function getDropboxBackups(force = false) {
     if (!DropboxSync.isLinked()) {
       dropboxBackupsCache = null;
@@ -627,6 +774,9 @@
       setAppMessage(copy.success, 'success');
       const state = DropboxSync.getStatus();
       await refreshDropboxBackups(getDropboxBaseText(state), true);
+      if (context !== 'restore' && context !== 'merge') {
+        latestRemoteMetadata = null;
+      }
     } catch (err) {
       console.error('Sincronización con Dropbox falló', err);
       setAppMessage(copy.error, 'error');
@@ -651,6 +801,9 @@
       const baseText = getDropboxBaseText(state);
       dropboxStatus.textContent = `${baseText} Consultando backups...`;
       refreshDropboxBackups(baseText, !dropboxBackupsCache);
+      if (Crypto.isUnlocked()) {
+        setupAutoSyncPrompt();
+      }
     } else {
       dropboxBackupsCache = null;
       dropboxStatus.textContent = 'No conectado. Introduce tu App Key y pulsa Conectar.';
@@ -680,191 +833,27 @@
     DropboxSync.markAuthNoticeHandled();
   }
 
-  async function renderEntries() {
-    entriesContainer.innerHTML = '';
-    let items;
+  async function setupAutoSyncPrompt() {
+    if (!DropboxSync.isLinked()) return;
+    if (!Crypto.isUnlocked()) return;
     try {
-      items = await DB.listEntries();
+      const backups = await getDropboxBackups(true);
+      if (!backups.length) return;
+      const latest = backups[0];
+      latestRemoteMetadata = latest;
+
+      const revisionKey = latest.rev || latest.server_modified || latest.client_modified || latest.name;
+      if (autoSyncObservedRevision === revisionKey) return;
+
+      const prompt = window.confirm('Se encontró un backup más reciente en Dropbox. ¿Quieres abrir el asistente de sincronización ahora?');
+      autoSyncObservedRevision = revisionKey;
+      if (!prompt) return;
+
+      await handleDropboxImportFlow({ chosen: latest, autoTrigger: true });
     } catch (err) {
-      entriesContainer.innerHTML = '<p class="entry error">No se pudieron cargar las entradas.</p>';
-      console.error(err);
-      return;
-    }
-
-    if (!items.length) {
-      entriesContainer.innerHTML = '<p class="empty">Todavía no has guardado entradas. Empieza con la tuya primera.</p>';
-      return;
-    }
-
-    const sorted = [...items].sort((a, b) => {
-      const timeA = a.createdAt || 0;
-      const timeB = b.createdAt || 0;
-      if (timeA === timeB) return (b.id || 0) - (a.id || 0);
-      return timeB - timeA;
-    });
-
-    for (const item of sorted) {
-      const entryNode = document.createElement('article');
-      entryNode.className = 'entry';
-      entryNode.dataset.id = item.id;
-
-      let decrypted;
-      try {
-        decrypted = await Crypto.decryptString(item.ciphertext);
-      } catch (err) {
-        entryNode.innerHTML = '';
-        const errorMsg = document.createElement('p');
-        errorMsg.className = 'error';
-        errorMsg.textContent = 'No se pudo descifrar esta entrada. Puedes intentar eliminarla o importar un backup reciente.';
-        entryNode.appendChild(errorMsg);
-        const actions = document.createElement('div');
-        actions.className = 'entry-actions';
-        const deleteBtn = document.createElement('button');
-        deleteBtn.type = 'button';
-        deleteBtn.dataset.action = 'delete';
-        deleteBtn.dataset.id = item.id;
-        deleteBtn.textContent = 'Eliminar entrada corrupta';
-        actions.appendChild(deleteBtn);
-        entryNode.appendChild(actions);
-        entriesContainer.appendChild(entryNode);
-        console.error('Fallo al descifrar entrada', err);
-        continue;
-      }
-
-      let data;
-      try {
-        data = JSON.parse(decrypted);
-      } catch (err) {
-        entryNode.innerHTML = '<p class="error">La entrada está dañada.</p>';
-        entriesContainer.appendChild(entryNode);
-        console.error('JSON inválido en entrada', err);
-        continue;
-      }
-
-      const header = document.createElement('div');
-      header.className = 'entry-header';
-
-      const titleEl = document.createElement('h3');
-      titleEl.textContent = data.title?.trim() || 'Sin título';
-      header.appendChild(titleEl);
-
-      const timeEl = document.createElement('time');
-      const createdAt = data.createdAt || item.createdAt;
-      timeEl.datetime = createdAt ? new Date(createdAt).toISOString() : '';
-      timeEl.textContent = formatDate(createdAt);
-      header.appendChild(timeEl);
-
-      const body = document.createElement('div');
-      body.className = 'entry-body';
-
-      if (data.content && data.content.trim()) {
-        const paragraph = document.createElement('p');
-        paragraph.textContent = data.content.trim();
-        body.appendChild(paragraph);
-      }
-
-      if (data.photo) {
-        const img = document.createElement('img');
-        img.src = data.photo;
-        img.alt = `Foto adjunta a ${titleEl.textContent}`;
-        img.loading = 'lazy';
-        body.appendChild(img);
-      }
-
-      const actions = document.createElement('div');
-      actions.className = 'entry-actions';
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.dataset.action = 'delete';
-      deleteBtn.dataset.id = item.id;
-      deleteBtn.textContent = 'Eliminar';
-      actions.appendChild(deleteBtn);
-
-      entryNode.appendChild(header);
-      entryNode.appendChild(body);
-      entryNode.appendChild(actions);
-
-      entriesContainer.appendChild(entryNode);
+      console.error('Sincronización automática falló', err);
     }
   }
-
-  setBtn.addEventListener('click', async () => {
-    const password = passwordInput.value.trim();
-    if (password.length < 6) {
-      setLockMessage('Usa al menos 6 caracteres para mayor seguridad.');
-      return;
-    }
-    setLockMessage('Guardando contraseña...');
-    setBtn.disabled = unlockBtn.disabled = true;
-    try {
-      await Crypto.setPassword(password);
-      passwordInput.value = '';
-      setLockMessage('Contraseña actualizada. Diario desbloqueado.');
-      showApp();
-    } catch (err) {
-      setLockMessage('No se pudo guardar la contraseña. Inténtalo de nuevo.');
-      console.error(err);
-    } finally {
-      setBtn.disabled = unlockBtn.disabled = false;
-    }
-  });
-
-  unlockBtn.addEventListener('click', async () => {
-    const password = passwordInput.value.trim();
-    if (!password) {
-      setLockMessage('Introduce la contraseña.');
-      return;
-    }
-    setLockMessage('Comprobando contraseña...');
-    setBtn.disabled = unlockBtn.disabled = true;
-    try {
-      const success = await Crypto.tryUnlock(password);
-      if (success) {
-        passwordInput.value = '';
-        setLockMessage('');
-        showApp();
-      } else {
-        setLockMessage('Contraseña incorrecta.');
-      }
-    } catch (err) {
-      setLockMessage('Ha ocurrido un error al comprobar la contraseña.');
-      console.error(err);
-    } finally {
-      setBtn.disabled = unlockBtn.disabled = false;
-    }
-  });
-
-  logoutBtn.addEventListener('click', () => {
-    Crypto.lock();
-    form.reset();
-    setAppMessage('Sesión bloqueada. Vuelve a introducir la contraseña.', 'muted');
-    showLock('Sesión bloqueada.');
-  });
-
-  dropboxAppKeyInput.addEventListener('input', () => {
-    dropboxConnectBtn.disabled = !dropboxAppKeyInput.value.trim();
-  });
-
-  dropboxAppKeyInput.addEventListener('change', (event) => {
-    DropboxSync.setAppKey(event.target.value.trim());
-    updateDropboxUI();
-  });
-
-  dropboxConnectBtn.addEventListener('click', async () => {
-    const key = dropboxAppKeyInput.value.trim();
-    if (!key) {
-      setAppMessage('Introduce tu App Key de Dropbox para continuar.', 'error');
-      return;
-    }
-    try {
-      setAppMessage('Redirigiendo a Dropbox para autorizar...', 'muted');
-      await DropboxSync.connect(key);
-    } catch (err) {
-      setAppMessage('No se pudo iniciar la conexión con Dropbox.', 'error');
-      console.error(err);
-    }
-  });
 
   dropboxImportBtn.addEventListener('click', async () => {
     if (!DropboxSync.isLinked()) {
@@ -881,8 +870,8 @@
 
     dropboxImportBtn.disabled = true;
     try {
-      const baseText = getDropboxBaseText(DropboxSync.getStatus());
-      dropboxStatus.textContent = `${baseText} Buscando backups en Dropbox...`;
+      beatInactivityTimer();
+      dropboxStatus.textContent = `${getDropboxBaseText(DropboxSync.getStatus())} Buscando backups en Dropbox...`;
       setAppMessage('Consultando backups en Dropbox...', 'muted');
       const backups = await getDropboxBackups(true);
       if (!backups.length) {
@@ -896,130 +885,7 @@
         updateDropboxUI();
         return;
       }
-      setAppMessage(`Descargando ${chosen.name}...`, 'muted');
-      const serialized = await DropboxSync.downloadBackup(chosen.path_lower || chosen.path_display || chosen.path);
-      let parsedBackup;
-      try {
-        parsedBackup = parseBackupSerialized(serialized);
-      } catch (err) {
-        setAppMessage(err.message || 'Backup inválido.', 'error');
-        console.error(err);
-        return;
-      }
-
-      const backupEntries = parsedBackup.entries;
-      const backupMeta = parsedBackup.meta;
-      const originalState = await Crypto.exportState().catch(() => null);
-      let session = null;
-      let backupPassword = null;
-
-      if (backupMeta && backupMeta.salt && backupMeta.verifier) {
-        const promptMsg = 'Introduce la contraseña usado en este backup (normalmente la misma que usas en el diario).';
-        const providedPassword = window.prompt(promptMsg);
-        if (!providedPassword) {
-          setAppMessage('Importación cancelada: se requiere la contraseña para descifrar el backup.', 'error');
-          updateDropboxUI();
-          return;
-        }
-        try {
-          session = await Crypto.createSession(backupMeta, providedPassword);
-          backupPassword = providedPassword;
-        } catch (err) {
-          setAppMessage('La contraseña no coincide con este backup. No se importó nada.', 'error');
-          console.error(err);
-          return;
-        }
-      }
-
-      const localEntries = await DB.listEntries();
-      const diff = await buildBackupDiff(localEntries, backupEntries, session ? session.decryptString : undefined);
-
-      if (!diff.newEntries.length && !diff.conflicts.length) {
-        const proceed = window.confirm('El backup es idéntico al diario local. ¿Quieres sobrescribir igualmente?');
-        if (!proceed) {
-          setAppMessage('Importación cancelada: no había cambios.', 'muted');
-          updateDropboxUI();
-          return;
-        }
-        const count = await replaceWithBackupEntries(backupEntries);
-        let adoption = { migrated: 0 };
-        if (session && backupMeta) {
-          try {
-            adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
-          } catch (stateErr) {
-            setAppMessage(stateErr.message, 'error');
-            console.error(stateErr);
-            return;
-          }
-        }
-        await renderEntries();
-        await autoSyncWithDropbox('restore');
-        let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
-        if (adoption.migrated) {
-          message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
-        }
-        setAppMessage(message, 'success');
-        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
-        return;
-      }
-
-      const decision = await openDiffModal(diff, chosen.name);
-      if (!decision) {
-        setAppMessage('Importación cancelada.', 'muted');
-        updateDropboxUI();
-        return;
-      }
-
-      if (decision.action === 'merge') {
-        try {
-          const mergeResult = await mergeBackupEntries(diff);
-          let messageParts = [];
-          if (mergeResult.added) messageParts.push(`${mergeResult.added} nuevas`);
-          if (mergeResult.replaced) messageParts.push(`${mergeResult.replaced} actualizadas`);
-
-          if (session && backupMeta) {
-            try {
-              const adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
-              if (adoption.migrated) {
-                messageParts.push(`${adoption.migrated} migradas a la nueva clave`);
-              }
-            } catch (stateErr) {
-              setAppMessage(stateErr.message, 'error');
-              console.error(stateErr);
-              return;
-            }
-          }
-
-          const summary = messageParts.length ? `Fusionaste ${messageParts.join(', ')}.` : 'No había entradas para fusionar.';
-          setAppMessage(summary, messageParts.length ? 'success' : 'muted');
-          await renderEntries();
-          await autoSyncWithDropbox('merge');
-          await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
-        } catch (mergeErr) {
-          setAppMessage(mergeErr.message || 'No se pudo fusionar el backup.', 'error');
-          console.error(mergeErr);
-        }
-      } else {
-        const count = await replaceWithBackupEntries(backupEntries);
-        let adoption = { migrated: 0 };
-        if (session && backupMeta) {
-          try {
-            adoption = await adoptBackupState(session, backupMeta, backupPassword, originalState);
-          } catch (stateErr) {
-            setAppMessage(stateErr.message, 'error');
-            console.error(stateErr);
-            return;
-          }
-        }
-        await renderEntries();
-        await autoSyncWithDropbox('restore');
-        let message = `Se reemplazó el diario con ${count} entradas desde ${chosen.name}.`;
-        if (adoption.migrated) {
-          message += ` (${adoption.migrated} entradas migradas a la clave compartida)`;
-        }
-        setAppMessage(message, 'success');
-        await refreshDropboxBackups(getDropboxBaseText(DropboxSync.getStatus()), true);
-      }
+      await handleDropboxImportFlow({ chosen });
     } catch (err) {
       setAppMessage('No se pudo importar el backup desde Dropbox.', 'error');
       console.error(err);
@@ -1029,6 +895,7 @@
   });
 
   dropboxDisconnectBtn.addEventListener('click', () => {
+    clearInactivityTimer();
     DropboxSync.disconnect();
     dropboxBackupsCache = null;
     setAppMessage('Se desconectó Dropbox.', 'muted');
@@ -1042,6 +909,7 @@
       showLock('La sesión se cerró.');
       return;
     }
+    beatInactivityTimer();
 
     const title = document.getElementById('title').value.trim();
     const content = document.getElementById('content').value.trim();
@@ -1088,6 +956,7 @@
     if (!Number.isFinite(id)) return;
     button.disabled = true;
     try {
+      beatInactivityTimer();
       await DB.deleteEntry(id);
       setAppMessage('Entrada eliminada.', 'muted');
       await renderEntries();
@@ -1117,6 +986,7 @@
       if (DropboxSync.isLinked()) {
         setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
+          beatInactivityTimer();
           await DropboxSync.uploadBackup(backup.filename, backup.serialized);
           dropboxBackupsCache = null;
           setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
@@ -1135,6 +1005,18 @@
     } finally {
       syncBtn.disabled = false;
       syncBtn.textContent = originalText;
+    }
+  });
+
+  ['click', 'keydown', 'pointerdown', 'touchstart'].forEach((evt) => {
+    document.addEventListener(evt, beatInactivityTimer, true);
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      clearInactivityTimer();
+    } else {
+      beatInactivityTimer();
     }
   });
 
