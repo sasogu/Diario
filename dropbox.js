@@ -518,7 +518,7 @@ const DropboxSync = (function(){
       return () => listeners.delete(fn);
     },
     getStatus,
-    isLinked: () => !!tokens || !!encryptedTokensRaw || !!pendingPlainTokens,
+    isLinked: () => !!tokens || !!encryptedTokensRaw,
     getLastAuthResult: () => lastAuthResult,
     setAppKey,
     getAppKey,

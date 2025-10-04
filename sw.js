@@ -1,4 +1,4 @@
-const SW_VERSION = 'v0.1.17';
+const SW_VERSION = 'v0.1.18';
 const CACHE_NAME = `diario-${SW_VERSION}`;
 const CORE_ASSETS = [
   'index.html',
