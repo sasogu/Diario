@@ -936,60 +936,64 @@
     }
   }
 
-  dropboxConnectBtn.addEventListener('click', async () => {
-    const key = dropboxAppKeyInput.value.trim();
-    if (!key) {
-      setAppMessage('Introduce tu App Key de Dropbox para continuar.', 'error');
-      return;
-    }
-    try {
-      setAppMessage('Redirigiendo a Dropbox para autorizar...', 'muted');
-      await DropboxSync.connect(key);
-    } catch (err) {
-      setAppMessage('No se pudo iniciar la conexión con Dropbox.', 'error');
-      console.error(err);
-    }
-  });
+  if (dropboxConnectBtn) {
+    dropboxConnectBtn.addEventListener('click', async () => {
+      const key = dropboxAppKeyInput.value.trim();
+      if (!key) {
+        setAppMessage('Introduce tu App Key de Dropbox para continuar.', 'error');
+        return;
+      }
+      try {
+        setAppMessage('Redirigiendo a Dropbox para autorizar...', 'muted');
+        await DropboxSync.connect(key);
+      } catch (err) {
+        setAppMessage('No se pudo iniciar la conexión con Dropbox.', 'error');
+        console.error(err);
+      }
+    });
+  }
 
-  recoverDropboxBtn.addEventListener('click', async () => {
-    if (!DropboxSync.isLinked()) {
-      setLockMessage('Conecta Dropbox en este navegador para recuperar el diario.');
-      return;
-    }
-    recoverDropboxBtn.disabled = true;
-    try {
-      setLockMessage('Buscando backups en Dropbox...');
-      const backups = await getDropboxBackups(true);
-      if (!backups.length) {
-        setLockMessage('No hay backups disponibles en Dropbox.');
+  if (recoverDropboxBtn) {
+    recoverDropboxBtn.addEventListener('click', async () => {
+      if (!DropboxSync.isLinked()) {
+        setLockMessage('Conecta Dropbox en este navegador para recuperar el diario.');
         return;
       }
-      lockSection.classList.add('hidden');
-      const chosen = await openBackupPicker(backups);
-      if (!chosen) {
+      recoverDropboxBtn.disabled = true;
+      try {
+        setLockMessage('Buscando backups en Dropbox...');
+        const backups = await getDropboxBackups(true);
+        if (!backups.length) {
+          setLockMessage('No hay backups disponibles en Dropbox.');
+          return;
+        }
+        lockSection.classList.add('hidden');
+        const chosen = await openBackupPicker(backups);
+        if (!chosen) {
+          lockSection.classList.remove('hidden');
+          setLockMessage('Recuperación cancelada.');
+          return;
+        }
+        const result = await handleDropboxImportFlow({ chosen, autoTrigger: true });
+        if (!result || result.status === 'cancelled') {
+          lockSection.classList.remove('hidden');
+          setLockMessage('Recuperación cancelada.');
+        } else if (Crypto.isUnlocked()) {
+          setLockMessage('');
+          showApp();
+        } else {
+          lockSection.classList.remove('hidden');
+          setLockMessage('El backup se importó, pero debes introducir la contraseña correcta para desbloquear.');
+        }
+      } catch (err) {
+        console.error('Recuperación desde Dropbox falló', err);
         lockSection.classList.remove('hidden');
-        setLockMessage('Recuperación cancelada.');
-        return;
+        setLockMessage('No se pudo recuperar el backup desde Dropbox. Revisa la consola.');
+      } finally {
+        recoverDropboxBtn.disabled = false;
       }
-      const result = await handleDropboxImportFlow({ chosen, autoTrigger: true });
-      if (!result || result.status === 'cancelled') {
-        lockSection.classList.remove('hidden');
-        setLockMessage('Recuperación cancelada.');
-      } else if (Crypto.isUnlocked()) {
-        setLockMessage('');
-        showApp();
-      } else {
-        lockSection.classList.remove('hidden');
-        setLockMessage('El backup se importó, pero debes introducir la contraseña correcta para desbloquear.');
-      }
-    } catch (err) {
-      console.error('Recuperación desde Dropbox falló', err);
-      lockSection.classList.remove('hidden');
-      setLockMessage('No se pudo recuperar el backup desde Dropbox. Revisa la consola.');
-    } finally {
-      recoverDropboxBtn.disabled = false;
-    }
-  });
+    });
+  }
 
   dropboxImportBtn.addEventListener('click', async () => {
     if (!DropboxSync.isLinked()) {

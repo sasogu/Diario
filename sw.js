@@ -1,4 +1,5 @@
-const CACHE_NAME = 'diario-v16';
+const SW_VERSION = 'v16.1.0';
+const CACHE_NAME = `diario-${SW_VERSION}`;
 const CORE_ASSETS = [
   'index.html',
   'styles.css',
@@ -16,6 +17,7 @@ function toAbsoluteUrl(path) {
 }
 
 self.addEventListener('install', (event) => {
+  console.log('[ServiceWorker] install', SW_VERSION);
   const assets = CORE_ASSETS.map(toAbsoluteUrl);
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(assets))
@@ -24,6 +26,7 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+  console.log('[ServiceWorker] activate', SW_VERSION);
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))
