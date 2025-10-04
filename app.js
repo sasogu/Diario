@@ -1495,6 +1495,10 @@
     if (!button) return;
     const id = Number(button.dataset.id);
     if (!Number.isFinite(id)) return;
+    const confirmed = window.confirm('¿Seguro que quieres eliminar esta entrada? Esta acción no se puede deshacer.');
+    if (!confirmed) {
+      return;
+    }
     button.disabled = true;
     try {
       recordActivity();
