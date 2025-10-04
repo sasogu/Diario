@@ -13,6 +13,10 @@
   const entriesContainer = document.getElementById('entries');
   const appMsg = document.getElementById('app-msg');
   const titleInput = document.getElementById('title');
+  const contentInput = document.getElementById('content');
+  const photoInput = document.getElementById('photo');
+  const cancelEditBtn = document.getElementById('cancelEditBtn');
+  const saveBtn = form ? form.querySelector('button[type="submit"]') : null;
   const dropboxStatus = document.getElementById('dropbox-status');
   const dropboxConnectBtn = document.getElementById('dropboxConnectBtn');
   const dropboxImportBtn = document.getElementById('dropboxImportBtn');
@@ -57,6 +61,9 @@
   let lastActivityAt = null;
   let inactivityInterval = null;
   let autoSyncPromptShown = false;
+  let editingEntryId = null;
+  let editingOriginalData = null;
+  const renderedEntriesCache = new Map();
 
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
@@ -187,6 +194,70 @@
     if (!appMsg) return;
     appMsg.textContent = text;
     appMsg.dataset.tone = tone;
+  }
+
+  function clearPhotoField() {
+    if (photoInput) {
+      try {
+        photoInput.value = '';
+      } catch (err) {
+        console.warn('No se pudo limpiar el campo de foto', err);
+      }
+    }
+  }
+
+  function markEditingEntry(id = null) {
+    if (!entriesContainer) return;
+    const active = entriesContainer.querySelectorAll('.entry.editing');
+    active.forEach((node) => node.classList.remove('editing'));
+    if (id == null) return;
+    const target = entriesContainer.querySelector(`.entry[data-id="${id}"]`);
+    if (target) target.classList.add('editing');
+  }
+
+  function exitEditingMode() {
+    editingEntryId = null;
+    editingOriginalData = null;
+    if (form) form.classList.remove('editing');
+    if (saveBtn) saveBtn.textContent = 'Guardar';
+    if (cancelEditBtn) cancelEditBtn.classList.add('hidden');
+    markEditingEntry(null);
+    clearPhotoField();
+  }
+
+  function startEditingEntry(id) {
+    if (!Number.isFinite(id)) return;
+    const cached = renderedEntriesCache.get(id);
+    if (!cached || !cached.data) {
+      setAppMessage('No se pudo cargar esta entrada para editarla.', 'error');
+      return;
+    }
+
+    if (form) {
+      form.reset();
+      form.classList.add('editing');
+    }
+    editingEntryId = id;
+    const createdAt = cached.data.createdAt || cached.item?.createdAt || Date.now();
+    editingOriginalData = {
+      createdAt,
+      photo: cached.data.photo || null
+    };
+    if (saveBtn) saveBtn.textContent = 'Actualizar';
+    if (cancelEditBtn) cancelEditBtn.classList.remove('hidden');
+    if (titleInput) titleInput.value = cached.data.title || '';
+    if (contentInput) contentInput.value = cached.data.content || '';
+    clearPhotoField();
+    markEditingEntry(id);
+    const hint = editingOriginalData.photo
+      ? 'Editando entrada. La foto actual se conservará si no subes una nueva.'
+      : 'Editando entrada seleccionada.';
+    setAppMessage(hint, 'muted');
+    if (typeof recordActivity === 'function') recordActivity();
+    if (form && typeof form.scrollIntoView === 'function') {
+      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (titleInput) titleInput.focus();
   }
 
   function hasBiometricSupport() {
@@ -354,6 +425,8 @@
   function showLock(message) {
     stopInactivityWatcher();
     autoSyncPromptShown = false;
+    if (form) form.reset();
+    exitEditingMode();
     if (message) setLockMessage(message);
     if (lockSection) lockSection.classList.remove('hidden');
     if (appSection) appSection.classList.add('hidden');
@@ -429,6 +502,15 @@
         console.error('Fallo desactivando biometría', err);
         setAppMessage('No se pudo desactivar el desbloqueo biométrico.', 'error');
       });
+    });
+  }
+
+  if (cancelEditBtn) {
+    cancelEditBtn.addEventListener('click', () => {
+      recordActivity();
+      if (form) form.reset();
+      exitEditingMode();
+      setAppMessage('Edición cancelada.', 'muted');
     });
   }
 
@@ -616,6 +698,7 @@
   async function renderEntries() {
     if (!entriesContainer) return;
     entriesContainer.innerHTML = '';
+    renderedEntriesCache.clear();
     let items;
     try {
       items = await DB.listEntries();
@@ -688,6 +771,17 @@
       timeEl.textContent = formatDate(createdAt);
       header.appendChild(timeEl);
 
+      if (Number.isFinite(item.id)) {
+        const normalizedData = {
+          ...data,
+          createdAt
+        };
+        renderedEntriesCache.set(item.id, {
+          item,
+          data: normalizedData
+        });
+      }
+
       const body = document.createElement('div');
       body.className = 'entry-body';
 
@@ -708,6 +802,15 @@
       const actions = document.createElement('div');
       actions.className = 'entry-actions';
 
+      if (Number.isFinite(item.id)) {
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.dataset.action = 'edit';
+        editBtn.dataset.id = item.id;
+        editBtn.textContent = 'Editar';
+        actions.appendChild(editBtn);
+      }
+
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.dataset.action = 'delete';
@@ -718,6 +821,10 @@
       entryNode.appendChild(header);
       entryNode.appendChild(body);
       entryNode.appendChild(actions);
+
+      if (Number.isFinite(item.id) && editingEntryId === item.id) {
+        entryNode.classList.add('editing');
+      }
 
       entriesContainer.appendChild(entryNode);
     }
@@ -1389,6 +1496,12 @@
           success: 'Entrada eliminada y backup actualizado en Dropbox.',
           error: 'Entrada eliminada, pero Dropbox falló. Revisa tu conexión.'
         },
+        update: {
+          start: 'Entrada actualizada. Preparando sincronización con Dropbox...',
+          upload: 'Entrada actualizada. Subiendo backup a Dropbox...',
+          success: 'Entrada actualizada y sincronizada con Dropbox.',
+          error: 'Entrada actualizada. Dropbox no se sincronizó; revisa tu conexión.'
+        },
         restore: {
           start: 'Backup restaurado. Preparando sincronización con Dropbox...',
           upload: 'Subiendo el backup restaurado a Dropbox...',
@@ -1664,16 +1777,20 @@
     recordActivity();
 
     const title = titleInput ? titleInput.value.trim() : '';
-    const contentInput = document.getElementById('content');
     const content = contentInput ? contentInput.value.trim() : '';
-    const photoInput = document.getElementById('photo');
     const timestamp = Date.now();
+    const editing = Number.isFinite(editingEntryId) && editingOriginalData;
+    const createdAt = editing && editingOriginalData.createdAt ? editingOriginalData.createdAt : timestamp;
 
     const entryData = {
       title,
       content,
-      createdAt: timestamp
+      createdAt
     };
+
+    if (editing) {
+      entryData.updatedAt = timestamp;
+    }
 
     let photoOptimizationNotice = null;
     if (photoInput && photoInput.files && photoInput.files[0]) {
@@ -1688,31 +1805,47 @@
         console.error(err);
         return;
       }
+    } else if (editing && editingOriginalData.photo) {
+      entryData.photo = editingOriginalData.photo;
     }
 
     try {
       const plaintext = JSON.stringify(entryData);
       const ciphertext = await Crypto.encryptString(plaintext);
-      await DB.saveEntry({ ciphertext, createdAt: timestamp });
-      form.reset();
-      await renderEntries();
-      if (DropboxSync.isLinked()) {
-        await autoSyncWithDropbox('save');
+      if (editing) {
+        await DB.putEntry({ id: editingEntryId, ciphertext, createdAt });
       } else {
-        const baseMessage = 'Entrada guardada correctamente.';
+        await DB.saveEntry({ ciphertext, createdAt });
+      }
+      form.reset();
+      exitEditingMode();
+      await renderEntries();
+      const baseMessage = editing ? 'Entrada actualizada correctamente.' : 'Entrada guardada correctamente.';
+      if (DropboxSync.isLinked()) {
+        await autoSyncWithDropbox(editing ? 'update' : 'save');
+      } else {
         setAppMessage(photoOptimizationNotice ? `${baseMessage} ${photoOptimizationNotice}` : baseMessage, 'success');
       }
     } catch (err) {
-      setAppMessage('No se pudo guardar la entrada. Revisa la consola.', 'error');
+      setAppMessage(editing ? 'No se pudo actualizar la entrada.' : 'No se pudo guardar la entrada. Revisa la consola.', 'error');
       console.error(err);
     }
   });
 
   if (entriesContainer) entriesContainer.addEventListener('click', async (event) => {
-    const button = event.target.closest('button[data-action="delete"]');
+    const button = event.target.closest('button[data-action]');
     if (!button) return;
+    const action = button.dataset.action;
     const id = Number(button.dataset.id);
     if (!Number.isFinite(id)) return;
+
+    if (action === 'edit') {
+      startEditingEntry(id);
+      return;
+    }
+
+    if (action !== 'delete') return;
+
     const confirmed = window.confirm('¿Seguro que quieres eliminar esta entrada? Esta acción no se puede deshacer.');
     if (!confirmed) {
       return;

@@ -399,11 +399,27 @@ small {
 .entry-actions button {
   width: auto;
   padding-inline: 1rem;
+}
+
+.entry-actions button[data-action="delete"] {
   background: #f87171;
 }
 
-.entry-actions button:hover {
+.entry-actions button[data-action="delete"]:hover {
   background: #dc2626;
+}
+
+.entry-actions button[data-action="edit"] {
+  background: var(--accent);
+}
+
+.entry-actions button[data-action="edit"]:hover {
+  background: var(--accent-dark);
+}
+
+.entry.editing {
+  border-color: var(--accent);
+  box-shadow: 0 12px 28px rgba(10, 116, 218, 0.18);
 }
 
 .entry.error {
