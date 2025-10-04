@@ -23,7 +23,7 @@ body {
   align-items: center;
 }
 
-header {
+.topbar {
   width: min(720px, 100%);
   display: flex;
   align-items: center;
@@ -31,9 +31,26 @@ header {
   margin-bottom: 1rem;
 }
 
-header h1 {
+.topbar h1 {
   margin: 0;
   font-size: 1.8rem;
+}
+
+.topbar .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.topbar .btn:hover {
+  background: rgba(10, 116, 218, 0.08);
 }
 
 main {

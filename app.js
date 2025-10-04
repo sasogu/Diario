@@ -13,6 +13,7 @@
   const syncBtn = document.getElementById('syncBtn');
   const entriesContainer = document.getElementById('entries');
   const appMsg = document.getElementById('app-msg');
+  const titleInput = document.getElementById('title');
   const dropboxStatus = document.getElementById('dropbox-status');
   const dropboxConnectBtn = document.getElementById('dropboxConnectBtn');
   const dropboxImportBtn = document.getElementById('dropboxImportBtn');
@@ -116,7 +117,7 @@
       if (lastActivityAt && Date.now() - lastActivityAt >= SESSION_TIMEOUT_MS) {
         stopInactivityWatcher();
         Crypto.lock();
-        form.reset();
+        if (form) form.reset();
         setAppMessage('Sesión caducada por inactividad.', 'muted');
         showLock('Sesión caducada por inactividad.');
       }
@@ -130,10 +131,11 @@
   }
 
   function setLockMessage(text) {
-    lockMsg.textContent = text || '';
+    if (lockMsg) lockMsg.textContent = text || '';
   }
 
   function setAppMessage(text = '', tone = 'muted') {
+    if (!appMsg) return;
     appMsg.textContent = text;
     appMsg.dataset.tone = tone;
   }
@@ -142,15 +144,15 @@
     stopInactivityWatcher();
     autoSyncPromptShown = false;
     if (message) setLockMessage(message);
-    lockSection.classList.remove('hidden');
-    appSection.classList.add('hidden');
-    passwordInput.focus();
+    if (lockSection) lockSection.classList.remove('hidden');
+    if (appSection) appSection.classList.add('hidden');
+    if (passwordInput) passwordInput.focus();
   }
 
   function showApp() {
-    lockSection.classList.add('hidden');
-    appSection.classList.remove('hidden');
-    document.getElementById('title').focus();
+    if (lockSection) lockSection.classList.add('hidden');
+    if (appSection) appSection.classList.remove('hidden');
+    if (titleInput) titleInput.focus();
     renderEntries();
     ensureInactivityWatcher();
     if (!autoSyncPromptShown) {
@@ -161,14 +163,15 @@
     }
   }
 
-  setBtn.addEventListener('click', async () => {
+  if (setBtn) setBtn.addEventListener('click', async () => {
     const password = passwordInput.value.trim();
     if (password.length < 6) {
       setLockMessage('Usa al menos 6 caracteres para mayor seguridad.');
       return;
     }
     setLockMessage('Guardando contraseña...');
-    setBtn.disabled = unlockBtn.disabled = true;
+    if (unlockBtn) unlockBtn.disabled = true;
+    setBtn.disabled = true;
     try {
       await Crypto.setPassword(password);
       passwordInput.value = '';
@@ -179,18 +182,20 @@
       console.error('Error guardando contraseña', err);
       setLockMessage('No se pudo guardar la contraseña. Inténtalo de nuevo.');
     } finally {
-      setBtn.disabled = unlockBtn.disabled = false;
+      setBtn.disabled = false;
+      if (unlockBtn) unlockBtn.disabled = false;
     }
   });
 
-  unlockBtn.addEventListener('click', async () => {
+  if (unlockBtn) unlockBtn.addEventListener('click', async () => {
     const password = passwordInput.value.trim();
     if (!password) {
       setLockMessage('Introduce la contraseña.');
       return;
     }
     setLockMessage('Comprobando contraseña...');
-    setBtn.disabled = unlockBtn.disabled = true;
+    if (setBtn) setBtn.disabled = true;
+    unlockBtn.disabled = true;
     try {
       const ok = await Crypto.tryUnlock(password);
       if (ok) {
@@ -205,7 +210,8 @@
       console.error('Error al desbloquear', err);
       setLockMessage('Ocurrió un error al comprobar la contraseña.');
     } finally {
-      setBtn.disabled = unlockBtn.disabled = false;
+      if (setBtn) setBtn.disabled = false;
+      unlockBtn.disabled = false;
     }
   });
 
@@ -216,6 +222,97 @@
       reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo'));
       reader.readAsDataURL(blob);
     });
+  }
+
+  const PHOTO_MAX_DIMENSION = 1600;
+  const PHOTO_MAX_BYTES = 5 * 1024 * 1024; // ~5MB tras compresión
+  const PHOTO_MIN_QUALITY = 0.55;
+  const PHOTO_DEFAULT_QUALITY = 0.78;
+
+  async function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('No se pudo leer la imagen seleccionada.'));
+      };
+      img.src = url;
+    });
+  }
+
+  function canvasToBlob(canvas, mimeType, quality) {
+    if (typeof canvas.toBlob !== 'function') {
+      throw new Error('Este navegador no permite comprimir imágenes automáticamente.');
+    }
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('No se pudo generar la imagen comprimida.'));
+        }
+      }, mimeType, quality);
+    });
+  }
+
+  async function preparePhotoDataUrl(file) {
+    if (!file || !file.type?.startsWith('image/')) {
+      throw new Error('Solo se admiten imágenes como adjunto.');
+    }
+
+    if (typeof document === 'undefined' || !document.createElement) {
+      const dataUrl = await blobToDataUrl(file);
+      return { dataUrl, downgraded: false };
+    }
+
+    try {
+      const image = await loadImageFromFile(file);
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('No se pudo preparar el lienzo para comprimir la imagen.');
+
+      const largestSide = Math.max(image.width, image.height);
+      const scale = largestSide > PHOTO_MAX_DIMENSION ? PHOTO_MAX_DIMENSION / largestSide : 1;
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      const targetType = 'image/jpeg';
+      let quality = PHOTO_DEFAULT_QUALITY;
+      let blob = await canvasToBlob(canvas, targetType, quality);
+
+      while (blob.size > PHOTO_MAX_BYTES && quality > PHOTO_MIN_QUALITY) {
+        quality = Math.max(PHOTO_MIN_QUALITY, quality - 0.08);
+        blob = await canvasToBlob(canvas, targetType, quality);
+      }
+
+      if (blob.size > PHOTO_MAX_BYTES) {
+        throw new Error('La foto comprimida sigue siendo demasiado grande (más de 5MB). Usa una imagen más pequeña.');
+      }
+
+      if (blob.size >= file.size * 0.95 && scale === 1) {
+        const dataUrl = await blobToDataUrl(file);
+        return { dataUrl, downgraded: false };
+      }
+
+      const dataUrl = await blobToDataUrl(blob);
+      return {
+        dataUrl,
+        downgraded: blob.size < file.size || scale < 1 || targetType !== file.type
+      };
+    } catch (err) {
+      console.warn('No se pudo procesar la imagen adjunta, se usará el archivo original.', err);
+      if (file.size > PHOTO_MAX_BYTES) {
+        throw new Error('No se pudo optimizar la foto y supera el límite de 5MB. Usa una versión reducida.');
+      }
+      const dataUrl = await blobToDataUrl(file);
+      return { dataUrl, downgraded: false };
+    }
   }
 
   function formatDate(value) {
@@ -255,6 +352,7 @@
   }
 
   async function renderEntries() {
+    if (!entriesContainer) return;
     entriesContainer.innerHTML = '';
     let items;
     try {
@@ -963,6 +1061,7 @@
 
   async function refreshDropboxBackups(baseText, force = false) {
     if (!DropboxSync.isLinked()) return;
+    if (!dropboxStatus) return;
     try {
       const backups = await getDropboxBackups(force);
       if (!DropboxSync.isLinked()) return;
@@ -1034,6 +1133,9 @@
   }
 
   function updateDropboxUI(state = DropboxSync.getStatus()) {
+    const hasControls = dropboxAppKeyInput || dropboxConnectBtn || dropboxDisconnectBtn || dropboxImportBtn || dropboxStatus;
+    if (!hasControls) return;
+
     if (dropboxAppKeyInput) {
       const current = dropboxAppKeyInput.value.trim();
       const stored = state.appKey || '';
@@ -1042,21 +1144,28 @@
       }
     }
 
-    dropboxConnectBtn.disabled = !dropboxAppKeyInput.value.trim();
+    if (dropboxConnectBtn) {
+      const hasKey = dropboxAppKeyInput ? dropboxAppKeyInput.value.trim() : state.appKey;
+      dropboxConnectBtn.disabled = !hasKey;
+    }
 
     if (state.linked) {
-      dropboxDisconnectBtn.disabled = false;
-      dropboxImportBtn.disabled = false;
-      dropboxConnectBtn.textContent = 'Reautorizar Dropbox';
-      const baseText = getDropboxBaseText(state);
-      dropboxStatus.textContent = `${baseText} Consultando backups...`;
-      refreshDropboxBackups(baseText, !dropboxBackupsCache);
+      if (dropboxDisconnectBtn) dropboxDisconnectBtn.disabled = false;
+      if (dropboxImportBtn) dropboxImportBtn.disabled = false;
+      if (dropboxConnectBtn) dropboxConnectBtn.textContent = 'Reautorizar Dropbox';
+      if (dropboxStatus) {
+        const baseText = getDropboxBaseText(state);
+        dropboxStatus.textContent = `${baseText} Consultando backups...`;
+        refreshDropboxBackups(baseText, !dropboxBackupsCache);
+      }
     } else {
       dropboxBackupsCache = null;
-      dropboxStatus.textContent = 'No conectado. Introduce tu App Key y pulsa Conectar.';
-      dropboxDisconnectBtn.disabled = true;
-      dropboxImportBtn.disabled = true;
-      dropboxConnectBtn.textContent = 'Conectar con Dropbox';
+      if (dropboxStatus) {
+        dropboxStatus.textContent = 'No conectado. Introduce tu App Key y pulsa Conectar.';
+      }
+      if (dropboxDisconnectBtn) dropboxDisconnectBtn.disabled = true;
+      if (dropboxImportBtn) dropboxImportBtn.disabled = true;
+      if (dropboxConnectBtn) dropboxConnectBtn.textContent = 'Conectar con Dropbox';
       forgetRemoteBackupMarker();
     }
   }
@@ -1186,7 +1295,7 @@
     dropboxAppKeyInput.addEventListener('change', syncAppKey);
   }
 
-  dropboxImportBtn.addEventListener('click', async () => {
+  if (dropboxImportBtn) dropboxImportBtn.addEventListener('click', async () => {
     if (!DropboxSync.isLinked()) {
       setAppMessage('Conecta Dropbox antes de importar.', 'error');
       return;
@@ -1202,7 +1311,9 @@
     dropboxImportBtn.disabled = true;
     try {
       recordActivity();
-      dropboxStatus.textContent = `${getDropboxBaseText(DropboxSync.getStatus())} Buscando backups en Dropbox...`;
+      if (dropboxStatus) {
+        dropboxStatus.textContent = `${getDropboxBaseText(DropboxSync.getStatus())} Buscando backups en Dropbox...`;
+      }
       setAppMessage('Consultando backups en Dropbox...', 'muted');
       const backups = await getDropboxBackups(true);
       if (!backups.length) {
@@ -1225,7 +1336,7 @@
     }
   });
 
-  dropboxDisconnectBtn.addEventListener('click', () => {
+  if (dropboxDisconnectBtn) dropboxDisconnectBtn.addEventListener('click', () => {
     clearInactivityTimer();
     DropboxSync.disconnect();
     dropboxBackupsCache = null;
@@ -1233,7 +1344,7 @@
     updateDropboxUI();
   });
 
-  form.addEventListener('submit', async (event) => {
+  if (form) form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!Crypto.isUnlocked()) {
       setAppMessage('Primero desbloquea el diario para guardar.', 'error');
@@ -1242,8 +1353,9 @@
     }
     recordActivity();
 
-    const title = document.getElementById('title').value.trim();
-    const content = document.getElementById('content').value.trim();
+    const title = titleInput ? titleInput.value.trim() : '';
+    const contentInput = document.getElementById('content');
+    const content = contentInput ? contentInput.value.trim() : '';
     const photoInput = document.getElementById('photo');
     const timestamp = Date.now();
 
@@ -1253,11 +1365,16 @@
       createdAt: timestamp
     };
 
-    if (photoInput.files && photoInput.files[0]) {
+    let photoOptimizationNotice = null;
+    if (photoInput && photoInput.files && photoInput.files[0]) {
       try {
-        entryData.photo = await blobToDataUrl(photoInput.files[0]);
+        const result = await preparePhotoDataUrl(photoInput.files[0]);
+        entryData.photo = result.dataUrl;
+        if (result.downgraded) {
+          photoOptimizationNotice = 'La foto se redujo para que el backup siga siendo manejable.';
+        }
       } catch (err) {
-        setAppMessage('No se pudo procesar la foto adjunta.', 'error');
+        setAppMessage(err.message || 'No se pudo procesar la foto adjunta.', 'error');
         console.error(err);
         return;
       }
@@ -1272,7 +1389,8 @@
       if (DropboxSync.isLinked()) {
         await autoSyncWithDropbox('save');
       } else {
-        setAppMessage('Entrada guardada correctamente.', 'success');
+        const baseMessage = 'Entrada guardada correctamente.';
+        setAppMessage(photoOptimizationNotice ? `${baseMessage} ${photoOptimizationNotice}` : baseMessage, 'success');
       }
     } catch (err) {
       setAppMessage('No se pudo guardar la entrada. Revisa la consola.', 'error');
@@ -1280,7 +1398,7 @@
     }
   });
 
-  entriesContainer.addEventListener('click', async (event) => {
+  if (entriesContainer) entriesContainer.addEventListener('click', async (event) => {
     const button = event.target.closest('button[data-action="delete"]');
     if (!button) return;
     const id = Number(button.dataset.id);
@@ -1302,7 +1420,7 @@
     }
   });
 
-  syncBtn.addEventListener('click', async () => {
+  if (syncBtn) syncBtn.addEventListener('click', async () => {
     if (!Crypto.isUnlocked()) {
       setAppMessage('Desbloquea el diario antes de exportar.', 'error');
       return;

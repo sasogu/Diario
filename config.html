@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Diario PWA</title>
+  <title>Diario · Configuración</title>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <meta name="theme-color" content="#0a74da" />
 </head>
-<body>
+<body data-page="settings">
   <header class="topbar">
-    <h1>Diario (PWA)</h1>
-    <a class="btn" href="config.html">Configuración</a>
+    <h1>Configuración</h1>
+    <a class="btn" href="index.html">Volver al diario</a>
   </header>
 
   <main>
@@ -31,22 +31,22 @@
     </section>
 
     <section id="app" class="hidden">
-      <form id="entryForm" autocomplete="off">
-        <input id="title" placeholder="Título" required />
-        <textarea id="content" placeholder="Escribe tu entrada..." rows="6"></textarea>
-        <label class="filebtn">Adjuntar foto
-          <input id="photo" type="file" accept="image/*" />
+      <section id="cloud-sync" class="card">
+        <h2>Dropbox</h2>
+        <p class="muted">Conecta tu cuenta para subir e importar backups cifrados.</p>
+        <label class="text-label">App Key de Dropbox
+          <input id="dropboxAppKey" placeholder="p.ej. abcd1234" autocomplete="off" />
         </label>
+        <p id="dropbox-status" class="muted"></p>
         <div class="row">
-          <button type="submit">Guardar</button>
-          <button type="button" id="syncBtn">Descargar backup</button>
-          <button type="button" id="logoutBtn">Bloquear</button>
+          <button type="button" id="dropboxConnectBtn">Conectar con Dropbox</button>
+          <button type="button" id="dropboxImportBtn">Importar backup</button>
+          <button type="button" id="dropboxDisconnectBtn" class="secondary">Desconectar</button>
         </div>
-      </form>
+        <small class="muted">Registra este dominio como redirect URI en la consola de Dropbox (OAuth 2 PKCE).</small>
+      </section>
 
       <p id="app-msg" class="muted"></p>
-
-      <section id="entries"></section>
     </section>
   </main>
 
