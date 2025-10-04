@@ -98,6 +98,40 @@
     autoSyncObservedRevision = null;
   }
 
+  let unlockingInFlight = false;
+
+  async function attemptUnlock() {
+    if (!unlockBtn) return;
+    if (unlockingInFlight) return;
+    const password = passwordInput ? passwordInput.value.trim() : '';
+    if (!password) {
+      setLockMessage('Introduce la contraseña.');
+      return;
+    }
+    setLockMessage('Comprobando contraseña...');
+    if (setBtn) setBtn.disabled = true;
+    unlockBtn.disabled = true;
+    unlockingInFlight = true;
+    try {
+      const ok = await Crypto.tryUnlock(password);
+      if (ok) {
+        if (passwordInput) passwordInput.value = '';
+        setLockMessage('');
+        recordActivity();
+        showApp();
+      } else {
+        setLockMessage('Contraseña incorrecta.');
+      }
+    } catch (err) {
+      console.error('Error al desbloquear', err);
+      setLockMessage('Ocurrió un error al comprobar la contraseña.');
+    } finally {
+      if (setBtn) setBtn.disabled = false;
+      unlockBtn.disabled = false;
+      unlockingInFlight = false;
+    }
+  }
+
   function stopInactivityWatcher() {
     if (inactivityInterval) {
       clearInterval(inactivityInterval);
@@ -192,41 +226,14 @@
     }
   });
 
-  if (unlockBtn) unlockBtn.addEventListener('click', async () => {
-    const password = passwordInput.value.trim();
-    if (!password) {
-      setLockMessage('Introduce la contraseña.');
-      return;
-    }
-    setLockMessage('Comprobando contraseña...');
-    if (setBtn) setBtn.disabled = true;
-    unlockBtn.disabled = true;
-    try {
-      const ok = await Crypto.tryUnlock(password);
-      if (ok) {
-        passwordInput.value = '';
-        setLockMessage('');
-        recordActivity();
-        showApp();
-      } else {
-        setLockMessage('Contraseña incorrecta.');
-      }
-    } catch (err) {
-      console.error('Error al desbloquear', err);
-      setLockMessage('Ocurrió un error al comprobar la contraseña.');
-    } finally {
-      if (setBtn) setBtn.disabled = false;
-      unlockBtn.disabled = false;
-    }
-  });
+  if (unlockBtn) unlockBtn.addEventListener('click', attemptUnlock);
 
   if (passwordInput) {
     passwordInput.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
+      const isEnter = event.key === 'Enter' || event.key === 'Return' || event.keyCode === 13;
+      if (!isEnter) return;
       event.preventDefault();
-      if (unlockBtn && !unlockBtn.disabled) {
-        unlockBtn.click();
-      }
+      attemptUnlock();
     });
   }
 
