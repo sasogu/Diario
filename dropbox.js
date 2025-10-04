@@ -5,6 +5,7 @@ const DropboxSync = (function(){
   const STATE_KEY = 'diario_dropbox_oauth_state';
   const VERIFIER_KEY = 'diario_dropbox_pkce_verifier';
   const LAST_SYNC_KEY = 'diario_dropbox_last_sync';
+  const PLAIN_PENDING_KEY = 'diario_dropbox_pending_plain';
 
   let tokens = null;
   let lastSync = null;
@@ -51,11 +52,22 @@ const DropboxSync = (function(){
   }
 
   async function loadStoredTokens() {
+    pendingPlainTokens = null;
+    const pendingRaw = sessionStorage.getItem(PLAIN_PENDING_KEY);
+    if (pendingRaw) {
+      try {
+        pendingPlainTokens = JSON.parse(pendingRaw);
+      } catch (err) {
+        console.warn('No se pudo recuperar los tokens pendientes de Dropbox', err);
+        sessionStorage.removeItem(PLAIN_PENDING_KEY);
+        pendingPlainTokens = null;
+      }
+    }
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       tokens = null;
       encryptedTokensRaw = null;
-      pendingPlainTokens = null;
       return;
     }
     try {
@@ -71,7 +83,6 @@ const DropboxSync = (function(){
       if (parsed && parsed.iv && parsed.ct) {
         encryptedTokensRaw = raw;
         tokens = null;
-        pendingPlainTokens = null;
         if (isCryptoUnlocked()) {
           await ensureTokensDecrypted();
         }
@@ -81,7 +92,6 @@ const DropboxSync = (function(){
       // No era JSON parseable; asumimos que ya es la cadena cifrada.
       encryptedTokensRaw = raw;
       tokens = null;
-      pendingPlainTokens = null;
       if (isCryptoUnlocked()) {
         await ensureTokensDecrypted();
       }
@@ -92,7 +102,6 @@ const DropboxSync = (function(){
     localStorage.removeItem(STORAGE_KEY);
     tokens = null;
     encryptedTokensRaw = null;
-    pendingPlainTokens = null;
   }
 
   async function saveTokens(next){
@@ -100,18 +109,30 @@ const DropboxSync = (function(){
       tokens = null;
       pendingPlainTokens = null;
       rememberEncryptedTokens(null);
+      sessionStorage.removeItem(PLAIN_PENDING_KEY);
       notify();
-      return;
+      return 'cleared';
     }
     if (!isCryptoUnlocked()) {
-      throw new Error('Desbloquea el diario antes de vincular Dropbox.');
+      pendingPlainTokens = next;
+      tokens = null;
+      rememberEncryptedTokens(null);
+      try {
+        sessionStorage.setItem(PLAIN_PENDING_KEY, JSON.stringify(next));
+      } catch (err) {
+        console.warn('No se pudo guardar tokens pendientes de Dropbox', err);
+      }
+      notify();
+      return 'pending';
     }
     const payload = { ...next };
     const encrypted = await Crypto.encryptString(JSON.stringify(payload));
     tokens = payload;
     pendingPlainTokens = null;
     rememberEncryptedTokens(encrypted);
+    sessionStorage.removeItem(PLAIN_PENDING_KEY);
     notify();
+    return 'saved';
   }
 
   function saveLastSync(ts){
@@ -187,9 +208,13 @@ const DropboxSync = (function(){
       expiresAt: Date.now() + ((data.expires_in || 3600) - 30) * 1000,
       scope: data.scope
     };
-    await saveTokens(next);
-    await hydrateAccountInfo();
-    lastAuthResult = { status: 'linked' };
+    const saveResult = await saveTokens(next);
+    if (saveResult === 'saved') {
+      await hydrateAccountInfo();
+      lastAuthResult = { status: 'linked' };
+    } else {
+      lastAuthResult = { status: 'pending_unlock' };
+    }
     notify();
   }
 
@@ -408,6 +433,7 @@ const DropboxSync = (function(){
   function getStatus(){
     return {
       linked: !!tokens || !!encryptedTokensRaw || !!pendingPlainTokens,
+      pendingUnlock: !!pendingPlainTokens && !tokens && !encryptedTokensRaw,
       accountName: tokens?.accountName || null,
       email: tokens?.email || null,
       appKey: getAppKey(),
@@ -448,6 +474,9 @@ const DropboxSync = (function(){
       if (tokens && (!tokens.accountName || !tokens.email)) {
         await hydrateAccountInfo();
       }
+      if (pendingPlainTokens && !tokens && !encryptedTokensRaw) {
+        lastAuthResult = lastAuthResult || { status: 'pending_unlock' };
+      }
       notify();
     },
     connect: async (appKey) => {
@@ -477,6 +506,7 @@ const DropboxSync = (function(){
       saveLastSync(null);
       sessionStorage.removeItem(STATE_KEY);
       sessionStorage.removeItem(VERIFIER_KEY);
+      sessionStorage.removeItem(PLAIN_PENDING_KEY);
       lastAuthResult = { status: 'disconnected' };
       notify();
     },
@@ -498,8 +528,11 @@ const DropboxSync = (function(){
       const hadTokens = !!tokens;
       const hadPending = !!pendingPlainTokens;
       if (pendingPlainTokens) {
-        await saveTokens(pendingPlainTokens);
+        const result = await saveTokens(pendingPlainTokens);
         pendingPlainTokens = null;
+        if (result === 'saved') {
+          lastAuthResult = { status: 'linked' };
+        }
       }
       const decrypted = await ensureTokensDecrypted();
       if (decrypted && (!hadTokens && !hadPending)) {

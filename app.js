@@ -1565,12 +1565,15 @@
     }
 
     if (state.linked) {
+      const pendingUnlock = state.pendingUnlock;
       if (dropboxDisconnectBtn) dropboxDisconnectBtn.disabled = false;
-      if (dropboxImportBtn) dropboxImportBtn.disabled = !unlocked;
+      if (dropboxImportBtn) dropboxImportBtn.disabled = !unlocked || pendingUnlock;
       if (dropboxConnectBtn) dropboxConnectBtn.textContent = 'Reautorizar Dropbox';
       if (dropboxStatus) {
         const baseText = getDropboxBaseText(state);
-        if (!unlocked) {
+        if (pendingUnlock) {
+          dropboxStatus.textContent = `${baseText} Introduce tu contraseña para completar la vinculación.`;
+        } else if (!unlocked) {
           dropboxStatus.textContent = `${baseText} Desbloquea el diario para consultar los backups.`;
         } else {
           dropboxStatus.textContent = `${baseText} Consultando backups...`;
@@ -1602,6 +1605,8 @@
   if (authResult) {
     if (authResult.status === 'linked') {
       setAppMessage('Dropbox conectado correctamente.', 'success');
+    } else if (authResult.status === 'pending_unlock') {
+      setAppMessage('Dropbox conectado. Vuelve a introducir tu contraseña para finalizar la vinculación.', 'muted');
     } else if (authResult.status === 'error') {
       const detail = authResult.detail ? ` Detalle: ${String(authResult.detail).slice(0, 140)}.` : '';
       setAppMessage(`No se pudo completar la autorización de Dropbox. Reintenta.${detail}`, 'error');
