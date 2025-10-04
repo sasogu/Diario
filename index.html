@@ -83,6 +83,18 @@
     </div>
   </section>
 
+  <section id="password-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-inner">
+      <h2>Introduce la contraseña del backup</h2>
+      <p id="passwordPromptMsg" class="muted"></p>
+      <input id="passwordPromptInput" type="password" placeholder="Contraseña del backup" autocomplete="current-password" />
+      <div class="row">
+        <button type="button" id="passwordPromptConfirm">Aceptar</button>
+        <button type="button" id="passwordPromptCancel" class="secondary">Cancelar</button>
+      </div>
+    </div>
+  </section>
+
   <script src="crypto.js"></script>
   <script src="db.js"></script>
   <script src="dropbox.js"></script>

@@ -31,12 +31,18 @@
   const diffMergeBtn = document.getElementById('diffMergeBtn');
   const diffReplaceBtn = document.getElementById('diffReplaceBtn');
   const diffCancelBtn = document.getElementById('diffCancelBtn');
+  const passwordModal = document.getElementById('password-modal');
+  const passwordPromptMsg = document.getElementById('passwordPromptMsg');
+  const passwordPromptInput = document.getElementById('passwordPromptInput');
+  const passwordPromptConfirm = document.getElementById('passwordPromptConfirm');
+  const passwordPromptCancel = document.getElementById('passwordPromptCancel');
 
   let dropboxBackupsCache = null;
   let pickerResolve = null;
   let pickerOptions = [];
   let pickerSelectedIndex = null;
   let diffResolve = null;
+  let passwordPromptResolve = null;
   let latestRemoteMetadata = null;
   let autoSyncObservedRevision = null;
   const LAST_REMOTE_BACKUP_KEY = 'diario_last_remote_backup_marker';
@@ -220,6 +226,42 @@
       event.preventDefault();
       if (unlockBtn && !unlockBtn.disabled) {
         unlockBtn.click();
+      }
+    });
+  }
+
+  if (passwordPromptConfirm) {
+    passwordPromptConfirm.addEventListener('click', () => {
+      recordActivity();
+      const value = passwordPromptInput ? passwordPromptInput.value : '';
+      finishPasswordPrompt(value);
+    });
+  }
+
+  if (passwordPromptCancel) {
+    passwordPromptCancel.addEventListener('click', () => {
+      finishPasswordPrompt(null);
+    });
+  }
+
+  if (passwordPromptInput) {
+    passwordPromptInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        recordActivity();
+        const value = passwordPromptInput.value;
+        finishPasswordPrompt(value);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finishPasswordPrompt(null);
+      }
+    });
+  }
+
+  if (passwordModal) {
+    passwordModal.addEventListener('click', (event) => {
+      if (event.target === passwordModal) {
+        finishPasswordPrompt(null);
       }
     });
   }
@@ -627,6 +669,40 @@
     diffResolve = null;
   }
 
+  function hidePasswordPromptModal() {
+    if (!passwordModal) return;
+    passwordModal.classList.add('hidden');
+    passwordModal.setAttribute('aria-hidden', 'true');
+    if (passwordPromptInput) passwordPromptInput.value = '';
+    if (passwordPromptMsg) passwordPromptMsg.textContent = '';
+  }
+
+  function finishPasswordPrompt(value) {
+    if (!passwordPromptResolve) {
+      hidePasswordPromptModal();
+      return;
+    }
+    const resolve = passwordPromptResolve;
+    passwordPromptResolve = null;
+    hidePasswordPromptModal();
+    resolve(value);
+  }
+
+  function requestBackupPassword(message) {
+    if (!passwordModal || !passwordPromptInput || !passwordPromptConfirm || !passwordPromptCancel || !passwordPromptMsg) {
+      return Promise.resolve(window.prompt(message));
+    }
+    finishPasswordPrompt(null);
+    return new Promise((resolve) => {
+      passwordPromptResolve = resolve;
+      passwordPromptMsg.textContent = message || 'Introduce la contraseña usada en este backup (normalmente la misma que usas en el diario).';
+      passwordPromptInput.value = '';
+      passwordModal.classList.remove('hidden');
+      passwordModal.setAttribute('aria-hidden', 'false');
+      setTimeout(() => passwordPromptInput.focus(), 0);
+    });
+  }
+
   function renderDiffList(listElement, items, emptyMessage, renderItem) {
     listElement.innerHTML = '';
     if (!items.length) {
@@ -947,7 +1023,7 @@
         const promptMsg = autoTrigger
           ? 'Introduce la contraseña del backup encontrado en Dropbox para sincronizarlo (normalmente la misma del diario).'
           : 'Introduce la contraseña usada en este backup (normalmente la misma que usas en el diario).';
-        const providedPassword = window.prompt(promptMsg);
+        const providedPassword = await requestBackupPassword(promptMsg);
         if (!providedPassword) {
           setAppMessage('Sincronización cancelada: se requiere la contraseña del backup.', 'error');
           updateDropboxUI();
