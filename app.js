@@ -39,6 +39,7 @@
   let diffResolve = null;
   let latestRemoteMetadata = null;
   let autoSyncObservedRevision = null;
+  const LAST_REMOTE_BACKUP_KEY = 'diario_last_remote_backup_marker';
   const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
   const ACTIVITY_CHECK_INTERVAL = 15 * 1000;
   let lastActivityAt = null;
@@ -48,6 +49,48 @@
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
   if (diffReplaceBtn) diffReplaceBtn.disabled = false;
+
+  function getBackupRevisionKey(metadata) {
+    if (!metadata || typeof metadata !== 'object') return null;
+    return metadata.rev || metadata.server_modified || metadata.client_modified || metadata.name || null;
+  }
+
+  function getBackupModifiedMs(metadata) {
+    if (!metadata) return NaN;
+    const raw = metadata.server_modified || metadata.client_modified;
+    if (!raw) return NaN;
+    const value = new Date(raw).getTime();
+    return Number.isFinite(value) ? value : NaN;
+  }
+
+  function getStoredRemoteBackupMarker() {
+    try {
+      return localStorage.getItem(LAST_REMOTE_BACKUP_KEY);
+    } catch (err) {
+      console.warn('No se pudo leer el estado del backup remoto', err);
+      return null;
+    }
+  }
+
+  function rememberRemoteBackup(metadata) {
+    const marker = getBackupRevisionKey(metadata);
+    if (!marker) return;
+    try {
+      localStorage.setItem(LAST_REMOTE_BACKUP_KEY, marker);
+    } catch (err) {
+      console.warn('No se pudo guardar el estado del backup remoto', err);
+    }
+    autoSyncObservedRevision = marker;
+  }
+
+  function forgetRemoteBackupMarker() {
+    try {
+      localStorage.removeItem(LAST_REMOTE_BACKUP_KEY);
+    } catch (err) {
+      console.warn('No se pudo limpiar el estado del backup remoto', err);
+    }
+    autoSyncObservedRevision = null;
+  }
 
   function stopInactivityWatcher() {
     if (inactivityInterval) {
@@ -828,6 +871,7 @@
         setAppMessage('El backup remoto coincide con tu diario. No se aplicaron cambios.', 'muted');
         updateDropboxUI();
         if (wasLocked) lockSection.classList.remove('hidden');
+        rememberRemoteBackup(chosen);
         return { status: 'no_changes' };
       }
 
@@ -975,6 +1019,7 @@
       const backup = await collectBackupPayload();
       setAppMessage(copy.upload, 'muted');
       const metadata = await DropboxSync.uploadBackup(backup.filename, backup.serialized); console.log("[DropboxSync] upload", metadata);
+      rememberRemoteBackup(metadata);
       dropboxBackupsCache = null;
       setAppMessage(copy.success, 'success');
       const state = DropboxSync.getStatus();
@@ -1012,6 +1057,7 @@
       dropboxDisconnectBtn.disabled = true;
       dropboxImportBtn.disabled = true;
       dropboxConnectBtn.textContent = 'Conectar con Dropbox';
+      forgetRemoteBackupMarker();
     }
   }
 
@@ -1044,8 +1090,22 @@
       const latest = backups[0];
       latestRemoteMetadata = latest;
 
-      const revisionKey = latest.rev || latest.server_modified || latest.client_modified || latest.name;
+      const revisionKey = getBackupRevisionKey(latest);
+      if (!revisionKey) return;
       if (autoSyncObservedRevision === revisionKey) return;
+
+      const storedMarker = getStoredRemoteBackupMarker();
+      if (storedMarker && storedMarker === revisionKey) {
+        autoSyncObservedRevision = revisionKey;
+        return;
+      }
+
+      const remoteModified = getBackupModifiedMs(latest);
+      const lastSync = DropboxSync.getLastSync();
+      if (Number.isFinite(remoteModified) && Number.isFinite(lastSync) && remoteModified <= lastSync) {
+        rememberRemoteBackup(latest);
+        return;
+      }
 
       const prompt = window.confirm('Se encontró un backup más reciente en Dropbox. ¿Quieres abrir el asistente de sincronización ahora?');
       autoSyncObservedRevision = revisionKey;
