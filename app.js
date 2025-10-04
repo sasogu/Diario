@@ -1112,6 +1112,16 @@
     });
   }
 
+  if (dropboxAppKeyInput) {
+    const syncAppKey = () => {
+      const value = dropboxAppKeyInput.value.trim();
+      DropboxSync.setAppKey(value);
+      if (dropboxConnectBtn) dropboxConnectBtn.disabled = !value;
+    };
+    dropboxAppKeyInput.addEventListener('input', syncAppKey);
+    dropboxAppKeyInput.addEventListener('change', syncAppKey);
+  }
+
   dropboxImportBtn.addEventListener('click', async () => {
     if (!DropboxSync.isLinked()) {
       setAppMessage('Conecta Dropbox antes de importar.', 'error');
