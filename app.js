@@ -204,6 +204,115 @@
     URL.revokeObjectURL(url);
   }
 
+  async function renderEntries() {
+    entriesContainer.innerHTML = '';
+    let items;
+    try {
+      items = await DB.listEntries();
+    } catch (err) {
+      entriesContainer.innerHTML = '<p class="entry error">No se pudieron cargar las entradas.</p>';
+      console.error(err);
+      return;
+    }
+
+    if (!items.length) {
+      entriesContainer.innerHTML = '<p class="empty">Todavía no has guardado entradas. Empieza con la tuya primera.</p>';
+      return;
+    }
+
+    const sorted = [...items].sort((a, b) => {
+      const timeA = a.createdAt || 0;
+      const timeB = b.createdAt || 0;
+      if (timeA === timeB) return (b.id || 0) - (a.id || 0);
+      return timeB - timeA;
+    });
+
+    for (const item of sorted) {
+      const entryNode = document.createElement('article');
+      entryNode.className = 'entry';
+      entryNode.dataset.id = item.id;
+
+      let decrypted;
+      try {
+        decrypted = await Crypto.decryptString(item.ciphertext);
+      } catch (err) {
+        entryNode.innerHTML = '';
+        const errorMsg = document.createElement('p');
+        errorMsg.className = 'error';
+        errorMsg.textContent = 'No se pudo descifrar esta entrada. Puedes intentar eliminarla o importar un backup reciente.';
+        entryNode.appendChild(errorMsg);
+        const actions = document.createElement('div');
+        actions.className = 'entry-actions';
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.dataset.action = 'delete';
+        deleteBtn.dataset.id = item.id;
+        deleteBtn.textContent = 'Eliminar entrada corrupta';
+        actions.appendChild(deleteBtn);
+        entryNode.appendChild(actions);
+        entriesContainer.appendChild(entryNode);
+        console.error('Fallo al descifrar entrada', err);
+        continue;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(decrypted);
+      } catch (err) {
+        entryNode.innerHTML = '<p class="error">La entrada está dañada.</p>';
+        entriesContainer.appendChild(entryNode);
+        console.error('JSON inválido en entrada', err);
+        continue;
+      }
+
+      const header = document.createElement('div');
+      header.className = 'entry-header';
+
+      const titleEl = document.createElement('h3');
+      titleEl.textContent = data.title?.trim() || 'Sin título';
+      header.appendChild(titleEl);
+
+      const timeEl = document.createElement('time');
+      const createdAt = data.createdAt || item.createdAt;
+      timeEl.datetime = createdAt ? new Date(createdAt).toISOString() : '';
+      timeEl.textContent = formatDate(createdAt);
+      header.appendChild(timeEl);
+
+      const body = document.createElement('div');
+      body.className = 'entry-body';
+
+      if (data.content && data.content.trim()) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = data.content.trim();
+        body.appendChild(paragraph);
+      }
+
+      if (data.photo) {
+        const img = document.createElement('img');
+        img.src = data.photo;
+        img.alt = `Foto adjunta a ${titleEl.textContent}`;
+        img.loading = 'lazy';
+        body.appendChild(img);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'entry-actions';
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.dataset.action = 'delete';
+      deleteBtn.dataset.id = item.id;
+      deleteBtn.textContent = 'Eliminar';
+      actions.appendChild(deleteBtn);
+
+      entryNode.appendChild(header);
+      entryNode.appendChild(body);
+      entryNode.appendChild(actions);
+
+      entriesContainer.appendChild(entryNode);
+    }
+  }
+
   function normalizeBackupEntries(parsed) {
     if (!Array.isArray(parsed) || !parsed.length) {
       throw new Error('El backup está vacío.');
