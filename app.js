@@ -824,6 +824,14 @@
         return { status: 'no_changes' };
       }
 
+      if (autoTrigger) {
+        const manual = await handleDropboxImportFlow({ chosen });
+        if (!manual || manual.status === 'cancelled') {
+          if (wasLocked) lockSection.classList.add('hidden');
+        }
+        return manual;
+      }
+
       if (wasLocked) lockSection.classList.add('hidden');
       const decision = await openDiffModal(diff, chosen.name);
       if (!decision) {
@@ -959,7 +967,7 @@
       setAppMessage(copy.start, 'muted');
       const backup = await collectBackupPayload();
       setAppMessage(copy.upload, 'muted');
-      await DropboxSync.uploadBackup(backup.filename, backup.serialized);
+      const metadata = await DropboxSync.uploadBackup(backup.filename, backup.serialized); console.log("[DropboxSync] upload", metadata);
       dropboxBackupsCache = null;
       setAppMessage(copy.success, 'success');
       const state = DropboxSync.getStatus();
@@ -1236,7 +1244,7 @@
         setAppMessage('Backup descargado. Subiendo copia a Dropbox...', 'muted');
         try {
           recordActivity();
-          await DropboxSync.uploadBackup(backup.filename, backup.serialized);
+          const metadata = await DropboxSync.uploadBackup(backup.filename, backup.serialized); console.log("[DropboxSync] upload", metadata);
           dropboxBackupsCache = null;
           setAppMessage('Backup descargado y sincronizado con Dropbox.', 'success');
           const state = DropboxSync.getStatus();
