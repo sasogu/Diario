@@ -476,7 +476,11 @@
     }
   });
 
-  if (unlockBtn) unlockBtn.addEventListener('click', attemptUnlock);
+  if (unlockBtn) {
+    unlockBtn.addEventListener('click', () => {
+      attemptUnlock();
+    });
+  }
 
   if (biometricUnlockBtn) {
     biometricUnlockBtn.addEventListener('click', () => {
