@@ -26,6 +26,7 @@
           <button id="setBtn" type="button">Crear/Reset contraseña</button>
         </div>
         <button id="recoverDropboxBtn" type="button" class="secondary">Recuperar desde Dropbox</button>
+        <button id="biometricUnlockBtn" type="button" class="secondary hidden">Usar huella</button>
         <p id="lock-msg" class="muted"></p>
       </div>
     </section>
@@ -50,6 +51,16 @@
       </section>
 
       <p id="app-msg" class="muted"></p>
+
+      <section id="biometric-card" class="card">
+        <h2>Desbloqueo biométrico</h2>
+        <p id="biometric-status" class="muted"></p>
+        <div class="row">
+          <button type="button" id="enableBiometricBtn">Activar desbloqueo rápido</button>
+          <button type="button" id="disableBiometricBtn" class="secondary">Desactivar</button>
+        </div>
+        <small class="muted">Necesitas registrar una huella, Face ID o PIN del dispositivo compatible con WebAuthn.</small>
+      </section>
     </section>
   </main>
 
@@ -90,9 +101,9 @@
 
   <section id="password-modal" class="modal hidden" aria-hidden="true">
     <div class="modal-inner">
-      <h2>Introduce la contraseña del backup</h2>
+      <h2>Introduce la contraseña</h2>
       <p id="passwordPromptMsg" class="muted"></p>
-      <input id="passwordPromptInput" type="password" placeholder="Contraseña del backup" autocomplete="current-password" />
+      <input id="passwordPromptInput" type="password" placeholder="Contraseña" autocomplete="current-password" />
       <div class="row">
         <button type="button" id="passwordPromptConfirm">Aceptar</button>
         <button type="button" id="passwordPromptCancel" class="secondary">Cancelar</button>
@@ -103,6 +114,7 @@
   <script src="crypto.js"></script>
   <script src="db.js"></script>
   <script src="dropbox.js"></script>
+  <script src="biometric.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {

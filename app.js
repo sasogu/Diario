@@ -36,6 +36,11 @@
   const passwordPromptInput = document.getElementById('passwordPromptInput');
   const passwordPromptConfirm = document.getElementById('passwordPromptConfirm');
   const passwordPromptCancel = document.getElementById('passwordPromptCancel');
+  const biometricUnlockBtn = document.getElementById('biometricUnlockBtn');
+  const biometricStatus = document.getElementById('biometric-status');
+  const enableBiometricBtn = document.getElementById('enableBiometricBtn');
+  const disableBiometricBtn = document.getElementById('disableBiometricBtn');
+  const biometricApi = typeof Biometric !== 'undefined' ? Biometric : null;
 
   let dropboxBackupsCache = null;
   let pickerResolve = null;
@@ -45,6 +50,7 @@
   let passwordPromptResolve = null;
   let latestRemoteMetadata = null;
   let autoSyncObservedRevision = null;
+  let cachedBiometricAvailability = null;
   const LAST_REMOTE_BACKUP_KEY = 'diario_last_remote_backup_marker';
   const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
   const ACTIVITY_CHECK_INTERVAL = 15 * 1000;
@@ -55,6 +61,10 @@
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
   if (diffReplaceBtn) diffReplaceBtn.disabled = false;
+
+  if (biometricUnlockBtn || enableBiometricBtn || disableBiometricBtn || biometricStatus) {
+    await refreshBiometricState(true);
+  }
 
   function getBackupRevisionKey(metadata) {
     if (!metadata || typeof metadata !== 'object') return null;
@@ -100,34 +110,34 @@
 
   let unlockingInFlight = false;
 
-  async function attemptUnlock() {
-    if (!unlockBtn) return;
+  async function attemptUnlock(passwordOverride = null, source = 'password') {
     if (unlockingInFlight) return;
-    const password = passwordInput ? passwordInput.value.trim() : '';
+    const inputPassword = passwordInput ? passwordInput.value.trim() : '';
+    const password = passwordOverride != null ? passwordOverride : inputPassword;
     if (!password) {
-      setLockMessage('Introduce la contraseña.');
+      setLockMessage(source === 'biometric' ? 'No se obtuvo una contraseña para el desbloqueo automático.' : 'Introduce la contraseña.');
       return;
     }
-    setLockMessage('Comprobando contraseña...');
     if (setBtn) setBtn.disabled = true;
-    unlockBtn.disabled = true;
+    if (unlockBtn) unlockBtn.disabled = true;
     unlockingInFlight = true;
+    setLockMessage(source === 'biometric' ? 'Verificando identidad...' : 'Comprobando contraseña...');
     try {
       const ok = await Crypto.tryUnlock(password);
       if (ok) {
-        if (passwordInput) passwordInput.value = '';
+        if (passwordInput && passwordOverride == null) passwordInput.value = '';
         setLockMessage('');
         recordActivity();
         showApp();
       } else {
-        setLockMessage('Contraseña incorrecta.');
+        setLockMessage(source === 'biometric' ? 'No se pudo desbloquear automáticamente. Usa tu contraseña.' : 'Contraseña incorrecta.');
       }
     } catch (err) {
       console.error('Error al desbloquear', err);
       setLockMessage('Ocurrió un error al comprobar la contraseña.');
     } finally {
       if (setBtn) setBtn.disabled = false;
-      unlockBtn.disabled = false;
+      if (unlockBtn) unlockBtn.disabled = false;
       unlockingInFlight = false;
     }
   }
@@ -177,6 +187,168 @@
     if (!appMsg) return;
     appMsg.textContent = text;
     appMsg.dataset.tone = tone;
+  }
+
+  function hasBiometricSupport() {
+    return !!(biometricApi && typeof biometricApi.isSupported === 'function' && biometricApi.isSupported());
+  }
+
+  async function checkBiometricAvailability(forceRefresh = false) {
+    if (!biometricApi || typeof biometricApi.isAvailable !== 'function') {
+      cachedBiometricAvailability = false;
+      return false;
+    }
+    if (!hasBiometricSupport()) {
+      cachedBiometricAvailability = false;
+      return false;
+    }
+    if (!forceRefresh && cachedBiometricAvailability !== null) {
+      return cachedBiometricAvailability;
+    }
+    try {
+      cachedBiometricAvailability = await biometricApi.isAvailable();
+    } catch (err) {
+      console.warn('No se pudo comprobar la disponibilidad biométrica', err);
+      cachedBiometricAvailability = false;
+    }
+    return cachedBiometricAvailability;
+  }
+
+  async function refreshBiometricState(forceRefresh = false) {
+    const hasModule = !!biometricApi;
+    const hasButtons = biometricUnlockBtn || enableBiometricBtn || disableBiometricBtn || biometricStatus;
+    if (!hasModule || !hasButtons) {
+      if (biometricUnlockBtn) biometricUnlockBtn.classList.add('hidden');
+      if (enableBiometricBtn) enableBiometricBtn.disabled = true;
+      if (disableBiometricBtn) disableBiometricBtn.disabled = true;
+      if (biometricStatus) biometricStatus.textContent = 'Este navegador no admite autenticación biométrica.';
+      cachedBiometricAvailability = false;
+      return;
+    }
+
+    if (!hasBiometricSupport()) {
+      if (biometricUnlockBtn) {
+        biometricUnlockBtn.classList.add('hidden');
+        biometricUnlockBtn.disabled = true;
+      }
+      if (enableBiometricBtn) enableBiometricBtn.disabled = true;
+      if (disableBiometricBtn) disableBiometricBtn.disabled = true;
+      if (biometricStatus) {
+        biometricStatus.textContent = 'El dispositivo no soporta WebAuthn/autenticación biométrica.';
+      }
+      cachedBiometricAvailability = false;
+      return;
+    }
+
+    const available = await checkBiometricAvailability(forceRefresh);
+    const enrolled = typeof biometricApi.hasEnrollment === 'function' ? biometricApi.hasEnrollment() : false;
+
+    if (biometricUnlockBtn) {
+      biometricUnlockBtn.classList.toggle('hidden', !enrolled);
+      biometricUnlockBtn.disabled = !enrolled;
+    }
+
+    if (biometricStatus) {
+      if (!available) {
+        biometricStatus.textContent = 'No se detectó un autenticador de plataforma disponible en este dispositivo.';
+      } else if (enrolled) {
+        biometricStatus.textContent = 'Desbloqueo biométrico activado en este dispositivo.';
+      } else {
+        biometricStatus.textContent = 'Puedes activar el desbloqueo biométrico para iniciar sesión con huella, Face ID o PIN seguro.';
+      }
+    }
+
+    if (enableBiometricBtn) {
+      enableBiometricBtn.disabled = !available || enrolled;
+    }
+
+    if (disableBiometricBtn) {
+      disableBiometricBtn.disabled = !enrolled;
+    }
+  }
+
+  async function handleBiometricUnlock() {
+    if (!biometricApi || typeof biometricApi.unlock !== 'function') {
+      setLockMessage('El desbloqueo biométrico no está disponible.');
+      return;
+    }
+    if (!biometricApi.hasEnrollment || !biometricApi.hasEnrollment()) {
+      setLockMessage('Configura el desbloqueo biométrico desde Configuración.');
+      return;
+    }
+    if (unlockingInFlight) return;
+    biometricUnlockBtn.disabled = true;
+    setLockMessage('Solicitando autenticación biométrica...');
+    try {
+      const password = await biometricApi.unlock();
+      if (!password) throw new Error('No se obtuvo una contraseña para desbloquear el diario.');
+      await attemptUnlock(password, 'biometric');
+    } catch (err) {
+      console.error('Error en desbloqueo biométrico', err);
+      const message = err && err.message ? err.message : 'No se pudo autenticar con biometría.';
+      setLockMessage(`${message} Usa tu contraseña.`);
+    } finally {
+      biometricUnlockBtn.disabled = false;
+    }
+  }
+
+  async function handleEnableBiometric() {
+    if (!biometricApi || typeof biometricApi.enable !== 'function') {
+      setAppMessage('El desbloqueo biométrico no está disponible en este navegador.', 'error');
+      return;
+    }
+    if (!Crypto.isUnlocked()) {
+      setAppMessage('Desbloquea el diario con tu contraseña antes de activar la biometría.', 'error');
+      return;
+    }
+    enableBiometricBtn.disabled = true;
+    setAppMessage('Preparando el registro biométrico...', 'muted');
+    try {
+      const available = await checkBiometricAvailability(true);
+      if (!available) {
+        throw new Error('No se detectó un autenticador de plataforma disponible.');
+      }
+      const promptMsg = 'Introduce la contraseña del diario para activar el desbloqueo biométrico en este dispositivo.';
+      const password = await requestBackupPassword(promptMsg);
+      if (!password) {
+        setAppMessage('Activación cancelada.', 'muted');
+        return;
+      }
+      const confirmed = await Crypto.tryUnlock(password);
+      if (!confirmed) {
+        setAppMessage('La contraseña introducida no es correcta.', 'error');
+        return;
+      }
+      await biometricApi.enable(password);
+      setAppMessage('Desbloqueo biométrico activado correctamente.', 'success');
+      recordActivity();
+    } catch (err) {
+      console.error('Error activando biometría', err);
+      const message = err && err.message ? err.message : 'No se pudo activar el desbloqueo biométrico.';
+      setAppMessage(message, 'error');
+    } finally {
+      enableBiometricBtn.disabled = false;
+      await refreshBiometricState(true);
+    }
+  }
+
+  async function handleDisableBiometric() {
+    if (!biometricApi || typeof biometricApi.disable !== 'function') return;
+    if (!biometricApi.hasEnrollment || !biometricApi.hasEnrollment()) {
+      setAppMessage('No hay un desbloqueo biométrico activo.', 'muted');
+      return;
+    }
+    const confirmed = window.confirm('¿Quieres desactivar el desbloqueo biométrico en este dispositivo?');
+    if (!confirmed) return;
+    try {
+      biometricApi.disable();
+      setAppMessage('Desbloqueo biométrico desactivado.', 'muted');
+    } catch (err) {
+      console.error('Error desactivando biometría', err);
+      setAppMessage('No se pudo desactivar el desbloqueo biométrico.', 'error');
+    } finally {
+      await refreshBiometricState(true);
+    }
   }
 
   function showLock(message) {
@@ -232,6 +404,33 @@
   });
 
   if (unlockBtn) unlockBtn.addEventListener('click', attemptUnlock);
+
+  if (biometricUnlockBtn) {
+    biometricUnlockBtn.addEventListener('click', () => {
+      handleBiometricUnlock().catch((err) => {
+        console.error('Fallo en desbloqueo biométrico', err);
+        setLockMessage('No se pudo iniciar el desbloqueo biométrico.');
+      });
+    });
+  }
+
+  if (enableBiometricBtn) {
+    enableBiometricBtn.addEventListener('click', () => {
+      handleEnableBiometric().catch((err) => {
+        console.error('Fallo activando biometría', err);
+        setAppMessage('No se pudo activar el desbloqueo biométrico.', 'error');
+      });
+    });
+  }
+
+  if (disableBiometricBtn) {
+    disableBiometricBtn.addEventListener('click', () => {
+      handleDisableBiometric().catch((err) => {
+        console.error('Fallo desactivando biometría', err);
+        setAppMessage('No se pudo desactivar el desbloqueo biométrico.', 'error');
+      });
+    });
+  }
 
   if (passwordInput) {
     passwordInput.addEventListener('keydown', (event) => {
@@ -707,7 +906,7 @@
     finishPasswordPrompt(null);
     return new Promise((resolve) => {
       passwordPromptResolve = resolve;
-      passwordPromptMsg.textContent = message || 'Introduce la contraseña usada en este backup (normalmente la misma que usas en el diario).';
+      passwordPromptMsg.textContent = message || 'Introduce la contraseña que utilizas en el diario.';
       passwordPromptInput.value = '';
       passwordModal.classList.remove('hidden');
       passwordModal.setAttribute('aria-hidden', 'false');
