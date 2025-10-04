@@ -8,7 +8,6 @@
   const passwordInput = document.getElementById('password');
   const unlockBtn = document.getElementById('unlockBtn');
   const setBtn = document.getElementById('setBtn');
-  const logoutBtn = document.getElementById('logoutBtn');
   const form = document.getElementById('entryForm');
   const syncBtn = document.getElementById('syncBtn');
   const entriesContainer = document.getElementById('entries');
@@ -214,6 +213,16 @@
       unlockBtn.disabled = false;
     }
   });
+
+  if (passwordInput) {
+    passwordInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      if (unlockBtn && !unlockBtn.disabled) {
+        unlockBtn.click();
+      }
+    });
+  }
 
   async function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
