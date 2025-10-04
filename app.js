@@ -43,6 +43,7 @@
   const ACTIVITY_CHECK_INTERVAL = 15 * 1000;
   let lastActivityAt = null;
   let inactivityInterval = null;
+  let autoSyncPromptShown = false;
 
   if (backupConfirmBtn) backupConfirmBtn.disabled = true;
   if (diffMergeBtn) diffMergeBtn.disabled = false;
@@ -96,6 +97,7 @@
 
   function showLock(message) {
     stopInactivityWatcher();
+    autoSyncPromptShown = false;
     if (message) setLockMessage(message);
     lockSection.classList.remove('hidden');
     appSection.classList.add('hidden');
@@ -108,7 +110,12 @@
     document.getElementById('title').focus();
     renderEntries();
     ensureInactivityWatcher();
-    setupAutoSyncPrompt();
+    if (!autoSyncPromptShown) {
+      autoSyncPromptShown = true;
+      setTimeout(() => {
+        if (Crypto.isUnlocked()) setupAutoSyncPrompt();
+      }, 300);
+    }
   }
 
   setBtn.addEventListener('click', async () => {
@@ -999,9 +1006,6 @@
       const baseText = getDropboxBaseText(state);
       dropboxStatus.textContent = `${baseText} Consultando backups...`;
       refreshDropboxBackups(baseText, !dropboxBackupsCache);
-      if (Crypto.isUnlocked()) {
-        setupAutoSyncPrompt();
-      }
     } else {
       dropboxBackupsCache = null;
       dropboxStatus.textContent = 'No conectado. Introduce tu App Key y pulsa Conectar.';
