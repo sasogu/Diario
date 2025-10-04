@@ -194,6 +194,11 @@
     if (titleInput) titleInput.focus();
     renderEntries();
     ensureInactivityWatcher();
+    if (typeof DropboxSync === 'object' && typeof DropboxSync.onSessionUnlocked === 'function') {
+      Promise.resolve(DropboxSync.onSessionUnlocked()).catch((err) => {
+        console.error('Dropbox onSessionUnlocked error', err);
+      });
+    }
     if (!autoSyncPromptShown) {
       autoSyncPromptShown = true;
       setTimeout(() => {
@@ -1228,6 +1233,8 @@
     const hasControls = dropboxAppKeyInput || dropboxConnectBtn || dropboxDisconnectBtn || dropboxImportBtn || dropboxStatus;
     if (!hasControls) return;
 
+    const unlocked = typeof Crypto === 'object' && typeof Crypto.isUnlocked === 'function' ? Crypto.isUnlocked() : false;
+
     if (dropboxAppKeyInput) {
       const current = dropboxAppKeyInput.value.trim();
       const stored = state.appKey || '';
@@ -1243,12 +1250,16 @@
 
     if (state.linked) {
       if (dropboxDisconnectBtn) dropboxDisconnectBtn.disabled = false;
-      if (dropboxImportBtn) dropboxImportBtn.disabled = false;
+      if (dropboxImportBtn) dropboxImportBtn.disabled = !unlocked;
       if (dropboxConnectBtn) dropboxConnectBtn.textContent = 'Reautorizar Dropbox';
       if (dropboxStatus) {
         const baseText = getDropboxBaseText(state);
-        dropboxStatus.textContent = `${baseText} Consultando backups...`;
-        refreshDropboxBackups(baseText, !dropboxBackupsCache);
+        if (!unlocked) {
+          dropboxStatus.textContent = `${baseText} Desbloquea el diario para consultar los backups.`;
+        } else {
+          dropboxStatus.textContent = `${baseText} Consultando backups...`;
+          refreshDropboxBackups(baseText, !dropboxBackupsCache);
+        }
       }
     } else {
       dropboxBackupsCache = null;
@@ -1341,6 +1352,10 @@
         setLockMessage('Conecta Dropbox en este navegador para recuperar el diario.');
         return;
       }
+      if (!Crypto.isUnlocked()) {
+        setLockMessage('Desbloquea el diario antes de recuperar desde Dropbox.');
+        return;
+      }
       recoverDropboxBtn.disabled = true;
       try {
         setLockMessage('Buscando backups en Dropbox...');
@@ -1428,9 +1443,13 @@
     }
   });
 
-  if (dropboxDisconnectBtn) dropboxDisconnectBtn.addEventListener('click', () => {
+  if (dropboxDisconnectBtn) dropboxDisconnectBtn.addEventListener('click', async () => {
     clearInactivityTimer();
-    DropboxSync.disconnect();
+    try {
+      await DropboxSync.disconnect();
+    } catch (err) {
+      console.error('Error desconectando Dropbox', err);
+    }
     dropboxBackupsCache = null;
     setAppMessage('Se desconectó Dropbox.', 'muted');
     updateDropboxUI();
